@@ -1,0 +1,6 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/sounds">
+    <file>success.mp3</file>
+    <file>error.mp3</file>
+</qresource>
+</RCC>
