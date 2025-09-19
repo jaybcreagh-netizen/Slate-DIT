@@ -17,193 +17,97 @@ from PySide6.QtWidgets import (
 )
 
 from utils import get_icon, get_icon_for_path, format_bytes, format_eta, resolve_path_template
+from models import Job, JobStatus
 
-# --- REWRITE: A new, from-scratch ToggleSwitch built from a base QWidget for maximum reliability and animation control ---
 class ToggleSwitch(QWidget):
-    """
-    A sleek, animated toggle switch widget.
-    It uses a parallel animation group to smoothly animate both the knob's position
-    and the track's color. An "OutBack" easing curve provides a satisfying
-    overshoot effect for the knob.
-    """
     toggled = Signal(bool)
-
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(44, 24)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Toggle")
-
+        self.setFixedSize(44, 24); self.setCursor(Qt.PointingHandCursor); self.setToolTip("Toggle")
         self._checked = False
-
-        # Define Colors
-        self._inactive_color = QColor("#3e3e42")
-        self._active_color = QColor("#007aff")
-        self._disabled_color = QColor("#555")
-        self._knob_color = QColor("#f0f0f0")
-        self._disabled_knob_color = QColor("#999")
-        
-        # Internal state properties for animation
-        self._knob_position = 3.0
-        self._background_color = self._inactive_color
-
-        # Animation Setup
-        self.pos_animation = QPropertyAnimation(self, b"knob_position")
-        self.pos_animation.setDuration(350)
-        self.pos_animation.setEasingCurve(QEasingCurve.OutBack)
-
-        self.color_animation = QPropertyAnimation(self, b"background_color_prop")
-        self.color_animation.setDuration(250)
-        self.color_animation.setEasingCurve(QEasingCurve.InOutQuad)
-        
-        self.animation_group = QParallelAnimationGroup(self)
-        self.animation_group.addAnimation(self.pos_animation)
-        self.animation_group.addAnimation(self.color_animation)
-        
+        self._inactive_color = QColor("#3e3e42"); self._active_color = QColor("#007aff"); self._disabled_color = QColor("#555")
+        self._knob_color = QColor("#f0f0f0"); self._disabled_knob_color = QColor("#999")
+        self._knob_position = 3.0; self._background_color = self._inactive_color
+        self.pos_animation = QPropertyAnimation(self, b"knob_position"); self.pos_animation.setDuration(350); self.pos_animation.setEasingCurve(QEasingCurve.OutBack)
+        self.color_animation = QPropertyAnimation(self, b"background_color_prop"); self.color_animation.setDuration(250); self.color_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.animation_group = QParallelAnimationGroup(self); self.animation_group.addAnimation(self.pos_animation); self.animation_group.addAnimation(self.color_animation)
         self._update_visuals(animated=False)
-
     @Property(float)
-    def knob_position(self):
-        return self._knob_position
-
+    def knob_position(self): return self._knob_position
     @knob_position.setter
-    def knob_position(self, value):
-        self._knob_position = value
-        self.update()
-
+    def knob_position(self, value): self._knob_position = value; self.update()
     @Property(QColor)
-    def background_color_prop(self):
-        return self._background_color
-
+    def background_color_prop(self): return self._background_color
     @background_color_prop.setter
-    def background_color_prop(self, color):
-        self._background_color = color
-        self.update()
-
-    def isChecked(self):
-        return self._checked
-    
+    def background_color_prop(self, color): self._background_color = color; self.update()
+    def isChecked(self): return self._checked
     def setChecked(self, checked):
-        if self._checked == checked:
-            return
-        self._checked = checked
-        self._update_visuals()
-        self.toggled.emit(self._checked)
-
+        if self._checked == checked: return
+        self._checked = checked; self._update_visuals(); self.toggled.emit(self._checked)
     def _update_visuals(self, animated=True):
         pos_target = 21.0 if self._checked else 3.0
         color_target = self._active_color if self._checked else self._inactive_color
-
         if animated:
-            self.animation_group.stop()
-            self.pos_animation.setEndValue(pos_target)
-            self.color_animation.setEndValue(color_target)
-            self.animation_group.start()
+            self.animation_group.stop(); self.pos_animation.setEndValue(pos_target); self.color_animation.setEndValue(color_target); self.animation_group.start()
         else:
-            self.knob_position = pos_target
-            self.background_color_prop = color_target
-
-    def mousePressEvent(self, e: QMouseEvent):
-        e.accept()
-        self.setChecked(not self.isChecked())
-        
+            self.knob_position = pos_target; self.background_color_prop = color_target
+    def mousePressEvent(self, e: QMouseEvent): e.accept(); self.setChecked(not self.isChecked())
     def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        bg_color = self._background_color
-        knob_color = self._knob_color
-
-        if not self.isEnabled():
-            bg_color = self._disabled_color
-            knob_color = self._disabled_knob_color
-        
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QBrush(bg_color))
+        painter = QPainter(self); painter.setRenderHint(QPainter.Antialiasing)
+        bg_color = self._background_color; knob_color = self._knob_color
+        if not self.isEnabled(): bg_color = self._disabled_color; knob_color = self._disabled_knob_color
+        painter.setPen(Qt.NoPen); painter.setBrush(QBrush(bg_color))
         painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
-        
-        painter.setBrush(QBrush(knob_color))
-        painter.drawEllipse(int(self.knob_position), 3, 18, 18)
-
+        painter.setBrush(QBrush(knob_color)); painter.drawEllipse(int(self.knob_position), 3, 18, 18)
 
 class JobListItem(QWidget):
     remove_requested = Signal(str)
-
-    def __init__(self, job_data, parent=None):
+    def __init__(self, job: Job, parent=None):
         super().__init__(parent)
-        self.job_id = job_data['id']
-        self.job_data = job_data
-        
-        main_layout = QHBoxLayout(self)
-        main_layout.setContentsMargins(12, 10, 12, 10)
-        main_layout.setSpacing(10)
-        
+        self.job_id = job.id; self.job = job
+        main_layout = QHBoxLayout(self); main_layout.setContentsMargins(12, 10, 12, 10); main_layout.setSpacing(10)
         self.status_icon = QLabel()
-        self.job_label = QLabel()
-        self.job_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.job_label.setWordWrap(False)
-
+        self.job_label = QLabel(); self.job_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); self.job_label.setWordWrap(False)
         self.remove_button = QPushButton(get_icon("xmark", "fa5s.times", color="gray"), "")
-        self.remove_button.setFixedSize(20, 20)
-        self.remove_button.setStyleSheet("background-color: transparent; border-radius: 10px;")
-        self.remove_button.setCursor(Qt.PointingHandCursor)
-        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.job_id))
-        self.remove_button.hide()
-
-        main_layout.addWidget(self.status_icon)
-        main_layout.addWidget(self.job_label, 1)
-        main_layout.addStretch()
-        main_layout.addWidget(self.remove_button)
-        
-        self.update_status(job_data)
-
+        self.remove_button.setFixedSize(20, 20); self.remove_button.setStyleSheet("background-color: transparent; border-radius: 10px;"); self.remove_button.setCursor(Qt.PointingHandCursor)
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.job_id)); self.remove_button.hide()
+        main_layout.addWidget(self.status_icon); main_layout.addWidget(self.job_label, 1); main_layout.addStretch(); main_layout.addWidget(self.remove_button)
+        self.update_status(job)
     def enterEvent(self, event):
-        if self.job_data.get('status') in ['Queued', 'Completed', 'Cancelled', 'Processed', 'Completed with errors']:
+        if self.job.status in [JobStatus.QUEUED, JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.PROCESSED, JobStatus.COMPLETED_WITH_ERRORS]:
              self.remove_button.show()
         super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self.remove_button.hide()
-        super().leaveEvent(event)
-
-    def update_status(self, job_data):
-        self.job_data = job_data
-        status = job_data['status']
-        
-        item_text = ""
-        if job_data.get("job_type") == "mhl_verify":
-            job_name = os.path.basename(job_data['mhl_file'])
-            item_text = f"<b>MHL Verify:</b> {job_name}"
+    def leaveEvent(self, event): self.remove_button.hide(); super().leaveEvent(event)
+    def update_status(self, job: Job):
+        self.job = job
+        status_name = job.status.name.replace('_', ' ').title()
+        if job.job_type == "mhl_verify":
+            item_text = f"<b>MHL Verify:</b> {os.path.basename(job.mhl_file)}"
         else:
-            sources = job_data.get('sources', [])
-            source_text = os.path.basename(sources[0]) if sources else "N/A"
-            if len(sources) > 1:
-                source_text += f" (+{len(sources) - 1})"
-
-            dests = job_data.get('destinations', [])
-            dest_text = os.path.basename(dests[0]) if dests else "N/A"
-            if len(dests) > 1:
-                dest_text += f" (+{len(dests) - 1})"
-            
+            source_text = os.path.basename(job.sources[0]) if job.sources else "N/A"
+            if len(job.sources) > 1: source_text += f" (+{len(job.sources) - 1})"
+            dest_text = os.path.basename(job.destinations[0]) if job.destinations else "N/A"
+            if len(job.destinations) > 1: dest_text += f" (+{len(job.destinations) - 1})"
             item_text = f"<b>{source_text}</b> &rarr; {dest_text}"
-
         fm = self.job_label.fontMetrics()
         elided_text = fm.elidedText(item_text, Qt.ElideRight, self.job_label.width())
         self.job_label.setText(elided_text)
-        
-        colors = {"Processed": "#4CAF50", "Completed": "#4CAF50", "Post-processing": "#9C27B0", "Running": "#00BCD4", "Cancelled": "#FF9800", "Queued": "gray", "Completed with errors": "#FF9800"}
-        icon_color = next((colors[s] for s in colors if s in status), "#F44336")
-        
-        icons = { "Processed": ("checkmark.seal.fill", "fa5s.check-double"), "Post-processing": ("film.fill", "fa5s.film"), "Completed": ("checkmark.circle.fill", "fa5s.check-circle"), "Running": ("gearshape.2.fill", "fa5s.cogs"), "Cancelled": ("xmark.octagon.fill", "fa5s.ban"), "Queued": ("clock.fill", "fa5s.clock"), "Completed with errors": ("exclamationmark.triangle.fill", "fa5s.exclamation-triangle")}
-        sfs_name, fa_name = icons.get(next((s for s in icons if s in status), "default"), ("exclamationmark.triangle.fill", "fa5s.exclamation-circle"))
-        icon = get_icon(sfs_name, fa_name, color=icon_color)
+        status_map = {
+            JobStatus.PROCESSED: ("#4CAF50", "checkmark.seal.fill", "fa5s.check-double"),
+            JobStatus.COMPLETED: ("#4CAF50", "checkmark.circle.fill", "fa5s.check-circle"),
+            JobStatus.POST_PROCESSING: ("#9C27B0", "film.fill", "fa5s.film"),
+            JobStatus.RUNNING: ("#00BCD4", "gearshape.2.fill", "fa5s.cogs"),
+            JobStatus.CANCELLED: ("#FF9800", "xmark.octagon.fill", "fa5s.ban"),
+            JobStatus.QUEUED: ("gray", "clock.fill", "fa5s.clock"),
+            JobStatus.COMPLETED_WITH_ERRORS: ("#FF9800", "exclamationmark.triangle.fill", "fa5s.exclamation-triangle"),
+        }
+        color, sfs_name, fa_name = status_map.get(job.status, ("#F44336", "exclamationmark.triangle.fill", "fa5s.exclamation-circle"))
+        icon = get_icon(sfs_name, fa_name, color=color)
         self.status_icon.setPixmap(icon.pixmap(QSize(18, 18)))
-        if sys.platform == "darwin": self.status_icon.setStyleSheet(f"color: {icon_color};")
-
+        if sys.platform == "darwin": self.status_icon.setStyleSheet(f"color: {color};")
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'job_data'):
-            self.update_status(self.job_data)
+        if hasattr(self, 'job'): self.update_status(self.job)
 
 class PathListItem(QWidget):
     remove_clicked = Signal(str)
@@ -213,19 +117,14 @@ class PathListItem(QWidget):
         layout = QHBoxLayout(self); layout.setContentsMargins(5, 5, 5, 5)
         self.icon_label = QLabel(); self.icon_label.setPixmap(get_icon_for_path(path).pixmap(QSize(32, 32)))
         text_layout = QVBoxLayout(); text_layout.setSpacing(1)
-        
         self.name_label = QLabel()
         font_name = self.name_label.font(); font_name.setPointSize(font_name.pointSize() + 1); self.name_label.setFont(font_name)
-        
         self.path_label = QLabel()
         font_path = self.path_label.font(); font_path.setPointSize(font_path.pointSize() - 2); self.path_label.setFont(font_path)
         self.path_label.setStyleSheet("color: #999;")
-
         self.name_label.setText(f"<b>{os.path.basename(path) or path}</b>")
         self.path_label.setText(os.path.dirname(path))
-        
         text_layout.addWidget(self.name_label); text_layout.addWidget(self.path_label)
-        
         if os.path.ismount(path):
             try:
                 usage = psutil.disk_usage(path)
@@ -234,24 +133,19 @@ class PathListItem(QWidget):
                 font_space = self.space_label.font(); font_space.setPointSize(font_space.pointSize() - 3); self.space_label.setFont(font_space)
                 self.space_label.setStyleSheet("color: #888;"); text_layout.addWidget(self.space_label)
             except Exception as e: print(f"Could not get disk usage for {path}: {e}")
-
         self.remove_button = QPushButton(get_icon("xmark.circle.fill", "fa5s.times", color="gray"), "")
         self.remove_button.setFlat(True); self.remove_button.setFixedSize(24, 24); self.remove_button.setStyleSheet("background-color: transparent;")
         self.remove_button.clicked.connect(lambda: self.remove_clicked.emit(self.path))
         layout.addWidget(self.icon_label); layout.addLayout(text_layout); layout.addStretch(); layout.addWidget(self.remove_button)
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        
         fm_path = self.path_label.fontMetrics()
         elided_path_text = fm_path.elidedText(os.path.dirname(self.path), Qt.ElideMiddle, self.path_label.width())
         self.path_label.setText(elided_path_text)
-        
         fm_name = self.name_label.fontMetrics()
         raw_name = os.path.basename(self.path) or self.path
         elided_name_text = fm_name.elidedText(raw_name, Qt.ElideRight, self.name_label.width())
         self.name_label.setText(f"<b>{elided_name_text}</b>")
-
 class PathListWidget(QListWidget):
     metadata_requested = Signal(str)
     eject_requested = Signal(str)
@@ -303,11 +197,9 @@ class PathListWidget(QListWidget):
             else: subprocess.run(["xdg-open", path])
         except Exception as e:
             print(f"Error opening path {path}: {e}")
-
 class AnimatedPathListWidget(PathListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-
     def add_path(self, path):
         if self.path_exists(path):
             return
@@ -320,13 +212,11 @@ class AnimatedPathListWidget(PathListWidget):
         self.anim_in = QPropertyAnimation(effect, b"opacity"); self.anim_in.setDuration(300)
         self.anim_in.setStartValue(0.0); self.anim_in.setEndValue(1.0)
         self.anim_in.setEasingCurve(QEasingCurve.InOutQuad); self.anim_in.start(QPropertyAnimation.DeleteWhenStopped)
-
     def remove_path(self, path_to_remove):
         for i in range(self.count()):
             item = self.item(i); widget = self.itemWidget(item)
             if widget and widget.path == path_to_remove:
                 self.takeItem(i); break
-
     def remove_path_animated(self, path_to_remove):
         for i in range(self.count()):
             item = self.item(i); widget = self.itemWidget(item)
@@ -338,7 +228,6 @@ class AnimatedPathListWidget(PathListWidget):
                 self.anim_out.setEasingCurve(QEasingCurve.InOutQuad)
                 self.anim_out.finished.connect(lambda p=path_to_remove: self.remove_path(p))
                 self.anim_out.start(QPropertyAnimation.DeleteWhenStopped); break
-
 class DropFrame(QFrame):
     def __init__(self, title, parent=None):
         super().__init__(parent)
@@ -348,21 +237,17 @@ class DropFrame(QFrame):
         title_layout = QHBoxLayout(); title_layout.setContentsMargins(0, 0, 0, 5)
         self.title_label = QLabel(f"<b>{title}</b>", objectName="TitleLabel")
         title_layout.addWidget(self.title_label); title_layout.addStretch()
-        
         self.add_button = QPushButton(get_icon("plus", "fa5s.plus"), ""); self.add_button.setFixedSize(28, 28)
         self.add_button.setObjectName("ToolbarButton")
         self.add_button.setToolTip(f"Add {title.lower()}"); title_layout.addWidget(self.add_button)
-        
         self.path_list = AnimatedPathListWidget()
         main_layout.addLayout(title_layout); main_layout.addWidget(self.path_list)
         self.add_button.clicked.connect(self._on_add_clicked)
-
         self.add_button.setIconSize(QSize(14, 14))
         self.button_anim = QPropertyAnimation(self.add_button, b"iconSize")
         self.button_anim.setDuration(120)
         self.button_anim.setEasingCurve(QEasingCurve.OutQuad)
         self.add_button.installEventFilter(self)
-
     def eventFilter(self, watched, event):
         if watched == self.add_button:
             if event.type() == QEvent.Type.Enter:
@@ -374,24 +259,19 @@ class DropFrame(QFrame):
                 self.button_anim.setEndValue(QSize(14, 14))
                 self.button_anim.start()
         return super().eventFilter(watched, event)
-
     def _on_add_clicked(self):
         path = QFileDialog.getExistingDirectory(self, f"Select a {self.title_label.text().lower()}")
         if path: self.path_list.add_path(path)
-    def mouseDoubleClickEvent(self, event: QMouseEvent):
-        self._on_add_clicked()
-        super().mouseDoubleClickEvent(event)
+    def mouseDoubleClickEvent(self, event: QMouseEvent): self._on_add_clicked(); super().mouseDoubleClickEvent(event)
     def dragEnterEvent(self, event: QMouseEvent):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
-    def dragLeaveEvent(self, event: QMouseEvent):
-        event.accept()
+    def dragLeaveEvent(self, event: QMouseEvent): event.accept()
     def dropEvent(self, event: QMouseEvent):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 if os.path.isdir(url.toLocalFile()): self.path_list.add_path(url.toLocalFile())
             event.acceptProposedAction()
         else: event.ignore()
-
 class MHLVerifyDialog(QDialog):
     add_job_requested = Signal(str, str)
     def __init__(self, parent=None):
@@ -436,7 +316,6 @@ class MHLVerifyDialog(QDialog):
     def add_job(self):
         self.add_job_requested.emit(self.mhl_path_edit.text(), self.target_dir_edit.text())
         self.accept()
-
 class ProjectManagerDialog(QDialog):
     project_selected = Signal(str)
     new_project_requested = Signal()
@@ -477,7 +356,6 @@ class ProjectManagerDialog(QDialog):
             self.accept()
         elif path:
             QMessageBox.warning(self, "Invalid Project", "The selected folder is not a valid project.")
-
 class SettingsDialog(QDialog):
     def __init__(self, global_settings, project_naming_preset, project_loaded, parent=None):
         super().__init__(parent)
@@ -518,14 +396,23 @@ class SettingsDialog(QDialog):
         transfer_group = QGroupBox("Transfer & Verification")
         form_layout_t = QFormLayout(transfer_group)
         self.verification_mode_combo = QComboBox()
-        self.verification_mode_combo.addItems(["Full (Hash Verification)", "File Size Check Only", "Copy Only (Unverified)"])
-        self.defer_post_process_checkbox = QCheckBox("Defer post-processing")
+        self.verification_mode_combo.addItem(get_icon("checkmark.shield.fill", "fa5s.check-double"), "Full (Hash Verification)")
+        self.verification_mode_combo.addItem(get_icon("ruler.fill", "fa5s.ruler-combined"), "File Size Check Only")
+        self.verification_mode_combo.addItem(get_icon("doc.on.doc.fill", "fa5s.copy"), "Copy Only (Unverified)")
+        self.verification_mode_combo.setItemData(0, "full")
+        self.verification_mode_combo.setItemData(1, "size")
+        self.verification_mode_combo.setItemData(2, "none")
+        self.defer_post_process_checkbox = ToggleSwitch()
         self.defer_post_process_checkbox.setToolTip("Run heavy tasks like thumbnail generation manually later.")
+        defer_layout = QHBoxLayout()
+        defer_layout.addWidget(self.defer_post_process_checkbox)
+        defer_layout.addWidget(QLabel("Defer post-processing"))
+        defer_layout.addStretch()
         form_layout_t.addRow("Verification Mode:", self.verification_mode_combo)
-        form_layout_t.addRow(self.defer_post_process_checkbox)
+        form_layout_t.addRow(defer_layout)
         layout.addWidget(transfer_group)
-        verify_map = {"full": 0, "size": 1, "none": 2}
-        self.verification_mode_combo.setCurrentIndex(verify_map.get(self.global_settings.get("verification_mode", "full")))
+        index = self.verification_mode_combo.findData(self.global_settings.get("verification_mode", "full"))
+        if index != -1: self.verification_mode_combo.setCurrentIndex(index)
         self.defer_post_process_checkbox.setChecked(self.global_settings.get("defer_post_process", False))
         layout.addStretch()
     def _setup_pdf_tab(self):
@@ -546,16 +433,21 @@ class SettingsDialog(QDialog):
         layout_group = QGroupBox("Report Layout")
         layout_form = QFormLayout(layout_group)
         self.thumb_mode_combo = QComboBox()
-        self.thumb_mode_combo.addItems(["Single Thumbnail", "Filmstrip (5)", "No Thumbnails"])
+        self.thumb_mode_combo.addItem(get_icon("photo.fill", "fa5s.image"), "Single Thumbnail")
+        self.thumb_mode_combo.addItem(get_icon("film.fill", "fa5s.film"), "Filmstrip (5)")
+        self.thumb_mode_combo.addItem(get_icon("photo.on.rectangle.angled", "fa5s.images"), "No Thumbnails")
+        self.thumb_mode_combo.setItemData(0, "single"); self.thumb_mode_combo.setItemData(1, "filmstrip"); self.thumb_mode_combo.setItemData(2, "none")
         self.detail_level_combo = QComboBox()
-        self.detail_level_combo.addItems(["Detailed", "Simple"])
+        self.detail_level_combo.addItem(get_icon("list.bullet.rectangle.fill", "fa5s.list-alt"), "Detailed")
+        self.detail_level_combo.addItem(get_icon("list.bullet", "fa5s.list"), "Simple")
+        self.detail_level_combo.setItemData(0, "detailed"); self.detail_level_combo.setItemData(1, "simple")
         layout_form.addRow("Thumbnail Mode:", self.thumb_mode_combo)
         layout_form.addRow("Detail Level:", self.detail_level_combo)
         layout.addWidget(layout_group)
-        thumb_map = {"single": 0, "filmstrip": 1, "none": 2}
-        self.thumb_mode_combo.setCurrentIndex(thumb_map.get(self.global_settings.get("pdf_thumbnail_mode", "single")))
-        detail_map = {"detailed": 0, "simple": 1}
-        self.detail_level_combo.setCurrentIndex(detail_map.get(self.global_settings.get("pdf_detail_level", "detailed")))
+        index_thumb = self.thumb_mode_combo.findData(self.global_settings.get("pdf_thumbnail_mode", "single"))
+        if index_thumb != -1: self.thumb_mode_combo.setCurrentIndex(index_thumb)
+        index_detail = self.detail_level_combo.findData(self.global_settings.get("pdf_detail_level", "detailed"))
+        if index_detail != -1: self.detail_level_combo.setCurrentIndex(index_detail)
         layout.addStretch()
     def _setup_naming_tab(self):
         main_layout = QVBoxLayout(self.naming_tab)
@@ -605,17 +497,13 @@ class SettingsDialog(QDialog):
         return {"project_name": self.project_name_input.text(), "camera_id": self.camera_id_input.text(), "template": self.template_input.text()}
     def get_settings(self):
         self.global_settings["concurrent_jobs"] = self.concurrent_jobs_spinbox.value()
-        verify_map = {0: "full", 1: "size", 2: "none"}
-        self.global_settings["verification_mode"] = verify_map.get(self.verification_mode_combo.currentIndex())
+        self.global_settings["verification_mode"] = self.verification_mode_combo.currentData()
         self.global_settings["defer_post_process"] = self.defer_post_process_checkbox.isChecked()
         self.global_settings["production_title"] = self.prod_title_input.text()
         self.global_settings["dit_name"] = self.dit_name_input.text()
-        thumb_map = {0: "single", 1: "filmstrip", 2: "none"}
-        self.global_settings["pdf_thumbnail_mode"] = thumb_map.get(self.thumb_mode_combo.currentIndex())
-        detail_map = {0: "detailed", 1: "simple"}
-        self.global_settings["pdf_detail_level"] = detail_map.get(self.detail_level_combo.currentIndex())
+        self.global_settings["pdf_thumbnail_mode"] = self.thumb_mode_combo.currentData()
+        self.global_settings["pdf_detail_level"] = self.detail_level_combo.currentData()
         return {"global": self.global_settings, "naming_preset": self._get_naming_data()}
-
 class MetadataDialog(QDialog):
     def __init__(self, existing_data=None, parent=None):
         super().__init__(parent)
