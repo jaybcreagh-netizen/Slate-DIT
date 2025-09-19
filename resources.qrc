@@ -1,0 +1,8 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <file alias="sounds/success.mp3">sounds/success.mp3</file>
+    <file alias="sounds/error.mp3">sounds/error.mp3</file>
+    <file alias="fonts/SF-Pro.ttf">fonts/SF-Pro.ttf</file>
+    <file alias="fonts/sfs-2-charmap.json">fonts/sfs-2-charmap.json</file>
+</qresource>
+</RCC>

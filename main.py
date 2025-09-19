@@ -3,51 +3,89 @@ import sys
 import os
 import json
 from datetime import datetime
-import multiprocessing # <-- IMPORT THIS
+import multiprocessing
+import tempfile
+import atexit
+import shutil
 
 import psutil
 import qtawesome as qta
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QListWidget, QListWidgetItem,
-    QComboBox, QProgressBar, QMessageBox, QCheckBox, QMenu, QInputDialog,
-    QFileDialog, QTextEdit
+    QComboBox, QProgressBar, QMessageBox, QMenu, QInputDialog,
+    QFileDialog, QTextEdit, QStatusBar, QToolBar, QSizePolicy, QSplitter
 )
-from PySide6.QtCore import QTimer, QPoint, QUrl, Qt
+from PySide6.QtCore import QTimer, QPoint, QUrl, Qt, QSize, QFile
 from PySide6.QtGui import QIcon, QFont, QAction, QKeyEvent
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
+import resources_rc
+
 from config import APP_NAME, PROJECTS_BASE_DIR
-from utils import resolve_path_template, format_bytes, format_eta
+from utils import get_icon, resolve_path_template, format_bytes, format_eta
 from ui_components import (
-    ProjectManagerDialog, SettingsDialog, MetadataDialog, DropFrame, MHLVerifyDialog, JobListItem
+    ProjectManagerDialog, SettingsDialog, MetadataDialog, DropFrame, MHLVerifyDialog, JobListItem, ToggleSwitch
 )
 from workers import EjectWorker, ScanWorker
 from job_manager import JobManager
 from report_manager import ReportManager
 
+def _load_fonts():
+    if sys.platform != "darwin":
+        return
+
+    temp_dir = tempfile.mkdtemp(prefix="slate_fonts_")
+    atexit.register(shutil.rmtree, temp_dir)
+
+    font_files_to_extract = {
+        ":/fonts/SF-Pro.ttf": "SF-Pro.ttf",
+        ":/fonts/sfs-2-charmap.json": "sfs-2-charmap.json"
+    }
+
+    try:
+        for resource_path, filename in font_files_to_extract.items():
+            temp_path = os.path.join(temp_dir, filename)
+            resource_file = QFile(resource_path)
+            if resource_file.open(QFile.ReadOnly):
+                font_data = resource_file.readAll()
+                with open(temp_path, "wb") as f:
+                    f.write(font_data)
+                resource_file.close()
+            else:
+                raise RuntimeError(f"Could not open resource: {resource_path}")
+
+        qta.load_font('sfs', 'SF-Pro.ttf', 'sfs-2-charmap.json', directory=temp_dir)
+        print("SF Symbols font loaded successfully from temporary directory.")
+
+    except Exception as e:
+        print(f"CRITICAL: Could not load SF Symbols font from resources. Error: {e}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME); self.setGeometry(100, 100, 1200, 800)
-        self.setWindowIcon(qta.icon("fa5s.rocket"))
+        
+        _load_fonts()
+
+        self.setWindowIcon(get_icon("tray.and.arrow.down.fill", "fa5s.rocket"))
         
         self.project_path = None
         self.source_metadata = {}
         self.card_counter = 1
         self.naming_preset = {}
         self.global_settings = {}
+
         self.eject_worker = None
         self.scan_worker = None
         self.job_item_map = {}
-
         self.job_manager = JobManager(self)
         self.report_manager = ReportManager(self)
-
         self.player = QMediaPlayer()
         self.audio_output = QAudioOutput()
         self.player.setAudioOutput(self.audio_output)
-
+        
         self._setup_ui()
         self._setup_menu()
         self._setup_drive_monitor()
@@ -60,120 +98,168 @@ class MainWindow(QMainWindow):
         self.audio_output.setVolume(0.8)
 
     def _setup_ui(self):
+        if sys.platform == "darwin": self.setUnifiedTitleAndToolBarOnMac(True)
+        
+        # --- REWRITE: Final stylesheet with sleek menus and progress bar colors ---
         self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e1e; color: #dcdcdc; }
-            QFrame { background-color: #252526; border-radius: 5px; }
-            QLabel { color: #dcdcdc; }
-            QPushButton { 
-                background-color: #007acc; color: white; border: none; 
-                padding: 8px 12px; border-radius: 4px;
-            }
-            QPushButton:hover { background-color: #005a9e; }
-            QPushButton:disabled { background-color: #3e3e42; color: #888; }
-            QPushButton[flat="true"] { background-color: transparent; }
-            QListWidget { background-color: #2d2d30; border: 1px solid #3e3e42; border-radius: 4px; }
-            QComboBox { 
-                background-color: #3e3e42; padding: 5px; border-radius: 4px; 
-            }
-            QProgressBar { text-align: center; }
-            QProgressBar::chunk { background-color: #007acc; }
-            QMenu { background-color: #2d2d30; color: white; }
-            QMenu::item:selected { background-color: #007acc; }
-            QLineEdit { background-color: #3e3e42; border: 1px solid #555; padding: 5px; border-radius: 4px; }
-            QCheckBox { spacing: 5px; }
-            QCheckBox::indicator { width: 13px; height: 13px; }
-            QGroupBox { border: 1px solid #3e3e42; margin-top: 10px; }
-            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top center; padding: 0 3px; }
-            QTabWidget::pane { border: 1px solid #3e3e42; }
-            QTabBar::tab { background: #252526; padding: 8px 20px; }
-            QTabBar::tab:selected { background: #007acc; }
+            QMainWindow { background-color: #1e1e1e; }
+            QWidget { font-family: ".AppleSystemUIFont", "Segoe UI", "Roboto", "Helvetica Neue", sans-serif; color: #f0f0f0; font-size: 13px; }
+            QFrame#MainFrame { background-color: transparent; border: none; }
+            QFrame#DropFrame { background-color: #2c2c2e; border: 1.5px dashed #444; border-radius: 8px; }
+            QSplitter::handle { background-color: #3a3a3c; height: 1px; }
+            QSplitter::handle:hover { background-color: #4a4a4c; }
+            QSplitter::handle:pressed { background-color: #007aff; }
+            QLabel#TitleLabel { font-size: 15px; font-weight: bold; padding: 4px 0; background-color: transparent; border: none;}
+            QPushButton { background-color: #007aff; color: white; border: none; padding: 8px 14px; border-radius: 6px; font-weight: 600; }
+            QPushButton:hover { background-color: #1085e0; }
+            QPushButton:disabled { background-color: #3e3e42; color: #777; }
+            QPushButton#ToolbarButton { background-color: #3e3e42; }
+            QPushButton#ToolbarButton:hover { background-color: #4e4e50; }
+            QToolBar { border: none; padding: 5px; margin: 0; }
+            QComboBox { background-color: #3e3e42; padding: 6px; border-radius: 5px; border: 1px solid #555; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: none; }
+            QComboBox QAbstractItemView { background-color: #3c3c3e; border: 1px solid #555; color: white; selection-background-color: #007aff; }
+            QProgressBar { text-align: center; border-radius: 5px; border: 1px solid #444; color: white; }
+            QProgressBar::chunk { background-color: #007aff; border-radius: 4px; }
+            QProgressBar[complete="true"]::chunk { background-color: #4CAF50; }
+            QMenu { background-color: #3c3c3e; color: white; border: 1px solid #555;}
+            QMenu::item:selected { background-color: #007aff; }
         """)
         
-        main_widget = QWidget(); main_layout = QVBoxLayout(main_widget)
-        top_layout = QHBoxLayout()
-        self.source_frame = DropFrame("Sources"); self.dest_frame = DropFrame("Destinations")
-        self.source_frame.path_list.metadata_requested.connect(self.show_metadata_dialog)
-        top_layout.addWidget(self.source_frame); top_layout.addWidget(self.dest_frame)
-        
-        controls_frame = QFrame(); controls_layout = QVBoxLayout(controls_frame)
-        
-        row1_layout = QHBoxLayout()
-        row1_layout.addWidget(QLabel("Checksum:")); self.checksum_combo = QComboBox()
-        self.checksum_combo.addItems(["xxHash (Fast)", "MD5 (Compatible)"]); row1_layout.addWidget(self.checksum_combo)
-        row1_layout.addStretch()
-        
-        self.mhl_verify_button = QPushButton(qta.icon("fa5s.check-double", color="white"), " Verify from MHL...")
-        self.mhl_verify_button.clicked.connect(self.show_mhl_verify_dialog)
-        row1_layout.addWidget(self.mhl_verify_button)
-
-        self.settings_button = QPushButton(qta.icon("fa5s.cog", color="white"), "")
-        self.settings_button.setToolTip("Open Settings")
-        self.settings_button.setFixedSize(36, 36)
-        self.settings_button.clicked.connect(self.show_settings_dialog)
-        row1_layout.addWidget(self.settings_button)
-        
-        self.add_to_queue_button = QPushButton(qta.icon("fa5s.plus-circle", color="white"), " Add Job to Queue")
-        self.add_to_queue_button.clicked.connect(self.add_job_to_queue)
-        row1_layout.addWidget(self.add_to_queue_button)
-
-        row2_layout = QHBoxLayout()
-        self.create_source_folder_checkbox = QCheckBox("Create folder for each source"); self.create_source_folder_checkbox.setChecked(True)
-        row2_layout.addWidget(self.create_source_folder_checkbox)
-        self.eject_checkbox = QCheckBox("Eject on completion"); row2_layout.addWidget(self.eject_checkbox)
-        self.skip_existing_checkbox = QCheckBox("Skip existing"); self.skip_existing_checkbox.setToolTip("Skips copying files that already exist with the same size at the destination."); self.skip_existing_checkbox.setChecked(True)
-        row2_layout.addWidget(self.skip_existing_checkbox)
-        self.resume_checkbox = QCheckBox("Resume partial"); self.resume_checkbox.setToolTip("Resumes copying for files that were partially transferred."); self.resume_checkbox.setChecked(True)
-        row2_layout.addWidget(self.resume_checkbox)
-        row2_layout.addStretch()
-
-        controls_layout.addLayout(row1_layout)
-        controls_layout.addLayout(row2_layout)
-
-        # --- NEW: Global Progress Frame ---
-        progress_frame = QFrame(); progress_layout = QVBoxLayout(progress_frame)
-        progress_layout.setContentsMargins(10,5,10,5); progress_layout.setSpacing(5)
-        
-        self.overall_progress_bar = QProgressBar(); self.overall_progress_bar.setTextVisible(True)
-        self.overall_progress_label = QLabel("Overall Progress");
-        font = self.overall_progress_label.font(); font.setPointSize(font.pointSize() - 2); self.overall_progress_label.setFont(font)
-        
-        self.file_progress_bar = QProgressBar(); self.file_progress_bar.setFixedHeight(12)
-        self.file_progress_label = QLabel("Current File"); self.file_progress_label.setFont(font)
-        
-        progress_layout.addWidget(self.overall_progress_label); progress_layout.addWidget(self.overall_progress_bar)
-        progress_layout.addWidget(self.file_progress_label); progress_layout.addWidget(self.file_progress_bar)
-        
-        bottom_frame = QFrame(); bottom_layout = QVBoxLayout(bottom_frame)
-        queue_controls_layout = QHBoxLayout()
-        self.queue_title_label = QLabel("<b>Job Queue</b>")
-        queue_controls_layout.addWidget(self.queue_title_label); queue_controls_layout.addStretch()
-        
-        self.start_queue_button = QPushButton(qta.icon("fa5s.play", color="white"), " Start Queue")
-        self.remove_job_button = QPushButton(qta.icon("fa5s.minus-circle", color="white"), " Remove Job")
-        self.cancel_button = QPushButton(qta.icon("fa5s.stop", color="white"), " Cancel")
-        self.clear_completed_button = QPushButton(qta.icon("fa5s.trash", color="white"), " Clear Completed")
-        self.save_session_report_button = QPushButton(qta.icon("fa5s.file-pdf", color="white"), " Save Session Report")
-
-        queue_controls_layout.addWidget(self.start_queue_button)
-        queue_controls_layout.addWidget(self.remove_job_button)
-        queue_controls_layout.addWidget(self.cancel_button)
-        queue_controls_layout.addWidget(self.clear_completed_button)
-        queue_controls_layout.addWidget(self.save_session_report_button)
-
-        self.job_list = QListWidget()
-        self.job_list.setStyleSheet("QListWidget::item { border-bottom: 1px solid #3e3e42; }")
-
-        bottom_layout.addLayout(queue_controls_layout)
-        bottom_layout.addWidget(self.job_list)
-        
-        main_layout.addLayout(top_layout, 1)
-        main_layout.addWidget(controls_frame)
-        main_layout.addWidget(progress_frame)
-        main_layout.addWidget(bottom_frame, 2)
+        main_widget = QWidget()
+        main_layout = QVBoxLayout(main_widget)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
         self.setCentralWidget(main_widget)
+
+        self._setup_toolbar()
         
+        content_frame = QFrame(objectName="MainFrame")
+        content_layout = QVBoxLayout(content_frame)
+        content_layout.setContentsMargins(10, 10, 10, 10)
+        content_layout.setSpacing(10)
+        main_layout.addWidget(content_frame)
+
+        splitter = QSplitter(Qt.Vertical)
+        
+        top_panel = QWidget()
+        top_layout = QHBoxLayout(top_panel)
+        top_layout.setContentsMargins(0,0,0,0)
+        top_layout.setSpacing(10)
+        self.source_frame = DropFrame("Sources")
+        self.dest_frame = DropFrame("Destinations")
+        self.source_frame.path_list.metadata_requested.connect(self.show_metadata_dialog)
+        top_layout.addWidget(self.source_frame)
+        top_layout.addWidget(self.dest_frame)
+        
+        splitter.addWidget(top_panel)
+        
+        bottom_panel = QWidget()
+        bottom_layout = QVBoxLayout(bottom_panel)
+        bottom_layout.setContentsMargins(0,0,0,0)
+        bottom_layout.setSpacing(10)
+
+        options_frame = QFrame()
+        options_frame.setStyleSheet("border: none; background-color: #2c2c2e; border-radius: 8px;")
+        options_main_layout = QVBoxLayout(options_frame)
+        options_main_layout.setContentsMargins(10, 5, 10, 10)
+        
+        options_title = QLabel("<b>Transfer Options</b>", objectName="TitleLabel")
+        options_main_layout.addWidget(options_title)
+
+        options_grid_layout = QHBoxLayout()
+        options_grid_layout.setSpacing(15)
+        options_grid_layout.addWidget(QLabel("Checksum:"))
+        self.checksum_combo = QComboBox()
+        self.checksum_combo.addItems(["xxHash (Fast)", "MD5 (Compatible)"])
+        options_grid_layout.addWidget(self.checksum_combo)
+        options_grid_layout.addStretch(1)
+        self.create_source_folder_checkbox = ToggleSwitch(); self.create_source_folder_checkbox.setChecked(True)
+        options_grid_layout.addWidget(self.create_source_folder_checkbox); options_grid_layout.addWidget(QLabel("Create source folder"))
+        options_grid_layout.addSpacing(10)
+        self.eject_checkbox = ToggleSwitch()
+        options_grid_layout.addWidget(self.eject_checkbox); options_grid_layout.addWidget(QLabel("Eject on completion"))
+        options_grid_layout.addSpacing(10)
+        self.skip_existing_checkbox = ToggleSwitch(); self.skip_existing_checkbox.setChecked(True)
+        options_grid_layout.addWidget(self.skip_existing_checkbox); options_grid_layout.addWidget(QLabel("Skip Duplicates"))
+        options_grid_layout.addSpacing(10)
+        self.resume_checkbox = ToggleSwitch(); self.resume_checkbox.setChecked(True)
+        options_grid_layout.addWidget(self.resume_checkbox); options_grid_layout.addWidget(QLabel("Resume Transfer"))
+        options_main_layout.addLayout(options_grid_layout)
+
+        bottom_layout.addWidget(options_frame)
+        
+        job_queue_frame = QFrame()
+        job_queue_frame.setStyleSheet("background-color: #2c2c2e; border-radius: 8px;")
+        queue_layout = QVBoxLayout(job_queue_frame)
+        queue_layout.setContentsMargins(0, 0, 0, 0)
+        self.job_list = QListWidget()
+        self.job_list.setStyleSheet("""
+            QListWidget { background-color: transparent; border: none; }
+            QListWidget::item { border-bottom: 1px solid #3a3a3c; }
+            QListWidget::item:hover { background-color: #38383a; border-radius: 5px; }
+            QListWidget::item:selected { background-color: #404043; border-radius: 5px; border-bottom: 1px solid transparent; }
+        """)
+        queue_layout.addWidget(self.job_list)
+
+        bottom_layout.addWidget(job_queue_frame, 1)
+        splitter.addWidget(bottom_panel)
+        
+        content_layout.addWidget(splitter)
+        
+        splitter.setSizes([self.height() * 0.35, self.height() * 0.65])
+
+        self.setStatusBar(QStatusBar(self)); self.statusBar().hide()
         self.source_frame.path_list.eject_requested.connect(self.on_eject_requested)
         self.dest_frame.path_list.eject_requested.connect(self.on_eject_requested)
+
+    def _setup_toolbar(self):
+        self.toolbar = QToolBar("Main Toolbar"); self.toolbar.setMovable(False)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
+
+        self.add_to_queue_button = QPushButton(get_icon("plus", "fa5s.plus", color="white"), " Add Job")
+        self.start_queue_button = QPushButton(get_icon("play.fill", "fa5s.play", color="white"), " Start Queue")
+        self.cancel_button = QPushButton(get_icon("stop.fill", "fa5s.stop", color="white"), " Cancel")
+        self.toolbar.addWidget(self.add_to_queue_button); self.toolbar.addWidget(self.start_queue_button); self.toolbar.addWidget(self.cancel_button)
+        
+        spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding); self.toolbar.addWidget(spacer)
+
+        progress_widget = QWidget()
+        progress_layout = QVBoxLayout(progress_widget); progress_layout.setContentsMargins(0,0,0,0); progress_layout.setSpacing(2)
+        
+        self.file_progress_label = QLabel("Idle"); 
+        font = self.file_progress_label.font(); font.setPointSize(font.pointSize() - 2); self.file_progress_label.setFont(font)
+        self.file_progress_label.setAlignment(Qt.AlignCenter)
+        
+        self.overall_progress_bar = QProgressBar(); self.overall_progress_bar.setTextVisible(True); self.overall_progress_bar.setMinimumWidth(350)
+        
+        progress_layout.addWidget(self.file_progress_label);
+        progress_layout.addWidget(self.overall_progress_bar)
+        self.toolbar.addWidget(progress_widget)
+        
+        spacer2 = QWidget(); spacer2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding); self.toolbar.addWidget(spacer2)
+        
+        self.queue_title_label = QLabel("<b>Job Queue</b>")
+        self.toolbar.addWidget(self.queue_title_label)
+        self.toolbar.addSeparator()
+
+        self.mhl_verify_button = QPushButton(get_icon("checkmark.shield.fill", "fa5s.check-double"), " MHL Verify")
+        self.settings_button = QPushButton(get_icon("gear", "fa5s.cog"), "")
+        
+        for btn in [self.mhl_verify_button, self.settings_button, self.cancel_button]:
+            btn.setObjectName("ToolbarButton")
+        
+        self.toolbar.addWidget(self.mhl_verify_button)
+        self.toolbar.addWidget(self.settings_button)
+
+    def show_status_message(self, message, timeout=5000):
+        self.statusBar().show()
+        self.statusBar().showMessage(message, timeout)
+
+    def clear_status_message(self):
+        self.statusBar().clearMessage()
+        self.statusBar().hide()
     
     def _setup_menu(self):
         menu_bar = self.menuBar()
@@ -204,55 +290,62 @@ class MainWindow(QMainWindow):
         self.job_manager.job_list_changed.connect(self.update_job_list)
         self.job_manager.queue_state_changed.connect(self.on_queue_state_changed)
         self.job_manager.overall_progress_updated.connect(self.update_overall_progress)
-        self.job_manager.file_progress_updated.connect(self.update_file_progress)
+        self.job_manager.job_file_progress_updated.connect(self.update_job_file_progress)
         self.job_manager.ejection_requested.connect(self._show_ejection_dialog)
         self.job_manager.play_sound.connect(self.play_sound)
         self.job_manager.mhl_verify_report_ready.connect(self.show_mhl_verify_report)
         
+        self.add_to_queue_button.clicked.connect(self.add_job_to_queue)
         self.start_queue_button.clicked.connect(self.job_manager.start_or_pause_queue)
         self.cancel_button.clicked.connect(self.job_manager.cancel_queue)
-        self.clear_completed_button.clicked.connect(self.job_manager.clear_completed_jobs)
-        self.remove_job_button.clicked.connect(self.job_manager.remove_selected_job)
-        
-        self.save_session_report_button.clicked.connect(self.save_session_report)
-        self.job_list.itemSelectionChanged.connect(self.update_remove_button_state)
+        self.mhl_verify_button.clicked.connect(self.show_mhl_verify_dialog)
+        self.settings_button.clicked.connect(self.show_settings_dialog)
 
     def on_queue_state_changed(self, is_running, job_queue):
         self._set_controls_enabled(not is_running)
         self.cancel_button.setVisible(is_running)
         self.start_queue_button.setEnabled(bool(job_queue) or is_running)
-
         if is_running:
             if self.job_manager.is_paused:
-                self.start_queue_button.setText(" Resume"); self.start_queue_button.setIcon(qta.icon("fa5s.play", color="white"))
+                self.start_queue_button.setText(" Resume"); self.start_queue_button.setIcon(get_icon("play.fill", "fa5s.play", color="white"))
             else:
-                self.start_queue_button.setText(" Pause"); self.start_queue_button.setIcon(qta.icon("fa5s.pause", color="white"))
+                self.start_queue_button.setText(" Pause"); self.start_queue_button.setIcon(get_icon("pause.fill", "fa5s.pause", color="white"))
         else:
-            self.start_queue_button.setText(" Start Queue"); self.start_queue_button.setIcon(qta.icon("fa5s.play", color="white"))
-            # Reset progress bars when queue stops
+            self.start_queue_button.setText(" Start Queue"); self.start_queue_button.setIcon(get_icon("play.fill", "fa5s.play", color="white"))
             self.update_overall_progress(0, "Queue Idle", 0.0, -1)
-            self.update_file_progress(0, "Current File", "", 0.0)
+            self.file_progress_label.setText("Idle")
 
     def update_overall_progress(self, percent, text, speed_mbps, eta_seconds):
         self.overall_progress_bar.setValue(percent)
-        speed_text = f"{speed_mbps:.2f} MB/s"
-        eta_text = f"ETA: {format_eta(eta_seconds)}"
-        self.overall_progress_bar.setFormat(f"{percent}%")
-        self.overall_progress_label.setText(f"{text} ({speed_text}, {eta_text})")
+        
+        is_complete = (percent == 100 and text.lower().startswith("queue complet"))
+        self.overall_progress_bar.setProperty("complete", is_complete)
+        self.overall_progress_bar.style().polish(self.overall_progress_bar)
 
-    def update_file_progress(self, percent, text, path, speed_mbps):
-        self.file_progress_bar.setValue(percent)
-        self.file_progress_label.setText(f"{text} {os.path.basename(path)}")
-        self.file_progress_bar.setFormat(f"{percent}%")
+        if is_complete:
+            self.overall_progress_bar.setFormat(text)
+            self.file_progress_label.setText("Complete")
+        else:
+            speed_text = f"{speed_mbps:.2f} MB/s"
+            eta_text = f"ETA: {format_eta(eta_seconds)}"
+            self.overall_progress_bar.setFormat(f"{percent}% ({speed_text}, {eta_text})")
+        
+    def update_job_file_progress(self, job_id, percent, text, path, speed_mbps):
+        # This signal is now only used to update the single text label
+        active_job = self.job_manager.active_workers[0].job if self.job_manager.active_workers else None
+        if active_job and active_job['id'] == job_id:
+            if speed_mbps > 0:
+                speed_text = f"({speed_mbps:.2f} MB/s)"
+                self.file_progress_label.setText(f"{os.path.basename(path)} - {percent}% {speed_text}")
+            elif path:
+                self.file_progress_label.setText(f"{os.path.basename(path)} - {text}")
+            else:
+                self.file_progress_label.setText("Waiting...")
 
     def play_sound(self, sound_type):
-        if sound_type == "success":
-            self.player.setSource(QUrl("qrc:/sounds/success.mp3"))
-        elif sound_type == "error":
-            self.player.setSource(QUrl("qrc:/sounds/error.mp3"))
-        
-        if self.player.source().isValid():
-            self.player.play()
+        if sound_type == "success": self.player.setSource(QUrl("qrc:/sounds/success.mp3"))
+        elif sound_type == "error": self.player.setSource(QUrl("qrc:/sounds/error.mp3"))
+        if self.player.source().isValid(): self.player.play()
     
     def on_eject_requested(self, path):
         if self.eject_worker and self.eject_worker.isRunning(): return
@@ -261,10 +354,8 @@ class MainWindow(QMainWindow):
         self.eject_worker.start()
 
     def on_ejection_finished(self, path, success):
-        if success:
-            QMessageBox.information(self, "Ejection Succeeded", f"Successfully ejected '{os.path.basename(path)}'.")
-        else:
-            QMessageBox.warning(self, "Ejection Failed", f"Failed to eject '{os.path.basename(path)}'. It may be in use by another application.")
+        if success: QMessageBox.information(self, "Ejection Succeeded", f"Successfully ejected '{os.path.basename(path)}'.")
+        else: QMessageBox.warning(self, "Ejection Failed", f"Failed to eject '{os.path.basename(path)}'. It may be in use by another application.")
         self.eject_worker = None
 
     def keyPressEvent(self, event: QKeyEvent):
@@ -274,9 +365,12 @@ class MainWindow(QMainWindow):
             if self.source_frame.path_list.hasFocus(): focused_list = self.source_frame.path_list
             elif self.dest_frame.path_list.hasFocus(): focused_list = self.dest_frame.path_list
             elif self.job_list.hasFocus():
-                self.job_manager.remove_selected_job()
+                selected_items = self.job_list.selectedItems()
+                if selected_items:
+                    widget = self.job_list.itemWidget(selected_items[0])
+                    if widget:
+                        self.job_manager.remove_job_by_id(widget.job_id)
                 return
-
             if focused_list and focused_list.currentItem():
                 widget = focused_list.itemWidget(focused_list.currentItem())
                 if widget: focused_list.remove_path(widget.path)
@@ -286,16 +380,20 @@ class MainWindow(QMainWindow):
         self.source_frame.setEnabled(enabled); self.dest_frame.setEnabled(enabled)
         self.checksum_combo.setEnabled(enabled)
         self.add_to_queue_button.setEnabled(enabled)
-        self.mhl_verify_button.setEnabled(enabled and is_project_loaded)
-        self.settings_button.setEnabled(enabled)
         self.start_queue_button.setEnabled(enabled and (bool(self.job_manager.job_queue) or bool(self.job_manager.active_workers)))
         self.eject_checkbox.setEnabled(enabled)
         self.skip_existing_checkbox.setEnabled(enabled)
         self.resume_checkbox.setEnabled(enabled)
-        self.update_remove_button_state()
         self.update_folder_creation_mode()
         self.load_template_action.setEnabled(enabled and is_project_loaded)
         self.save_template_action.setEnabled(enabled and is_project_loaded)
+        self.settings_button.setEnabled(enabled)
+        self.mhl_verify_button.setEnabled(enabled and is_project_loaded)
+        for action in self.menuBar().actions():
+            if action.text() == "&File":
+                for file_action in action.menu().actions():
+                    if file_action.text() in ["Settings...", "New Project...", "Open Project...", "Open Recent", "Close Project"]:
+                        file_action.setEnabled(enabled)
 
     def update_folder_creation_mode(self):
         has_template = bool(self.naming_preset.get("template"))
@@ -303,15 +401,12 @@ class MainWindow(QMainWindow):
         if has_template: self.create_source_folder_checkbox.setChecked(False)
 
     def add_job_to_queue(self):
-        if self.scan_worker and self.scan_worker.isRunning():
-            return
-
+        if self.scan_worker and self.scan_worker.isRunning(): return
         sources = self.source_frame.path_list.get_all_paths()
         destinations = self.dest_frame.path_list.get_all_paths()
         if not sources or not destinations:
             QMessageBox.warning(self, "Missing Paths", "Please add at least one source and one destination.")
             return
-
         job_params = {
             "sources": sources, "destinations": destinations, "naming_preset": self.naming_preset,
             "card_counter": self.card_counter, "has_template": bool(self.naming_preset.get("template")),
@@ -322,24 +417,19 @@ class MainWindow(QMainWindow):
             "verification_mode": self.global_settings.get("verification_mode", "full"),
             "defer_post_process": self.global_settings.get("defer_post_process", False)
         }
-
         self.scan_worker = ScanWorker(job_params)
         self.scan_worker.scan_finished.connect(self.on_scan_finished)
         self.scan_worker.finished.connect(lambda: self._set_controls_enabled(True))
-        
         self._set_controls_enabled(False)
-        self.job_manager.job_list_changed.emit()
         self.scan_worker.start()
 
     def on_scan_finished(self, job_params):
         job_id = f"Job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.job_manager.get_all_jobs()) + 1}"
-        
         destinations = set()
         for paths in job_params['resolved_dests'].values():
             if paths:
                 common_base = os.path.dirname(os.path.commonpath(paths))
                 destinations.add(common_base)
-
         job = {
             "id": job_id, "sources": job_params['sources'], "destinations": list(destinations),
             "resolved_dests": job_params['resolved_dests'], "checksum_method": job_params['checksum_method'],
@@ -348,24 +438,10 @@ class MainWindow(QMainWindow):
             "metadata": job_params['metadata'],
             "verification_mode": job_params['verification_mode'],
             "defer_post_process": job_params['defer_post_process'],
-            "report": {"total_size": job_params['total_size']} # Pre-populate for queue size calculation
+            "report": {"total_size": job_params['total_size']}
         }
-        
         self.job_manager.add_job_to_queue(job)
         self.card_counter += 1
-
-    def update_remove_button_state(self):
-        selected_items = self.job_list.selectedItems()
-        can_remove = False
-        if selected_items and not self.job_manager.is_running:
-            item = self.job_list.item(self.job_list.row(selected_items[0]))
-            widget = self.job_list.itemWidget(item)
-            job_id_to_check = widget.job_id
-            
-            is_in_queue = any(job['id'] == job_id_to_check for job in self.job_manager.job_queue)
-            if is_in_queue:
-                can_remove = True
-        self.remove_job_button.setEnabled(can_remove)
 
     def show_metadata_dialog(self, path):
         dialog = MetadataDialog(self.source_metadata.get(path), self)
@@ -420,8 +496,11 @@ class MainWindow(QMainWindow):
         self.card_counter = 1
         self._load_project_state()
         self._set_controls_enabled(True); self._add_to_recent_projects(path)
-        self.mounted_drives = {p.mountpoint for p in psutil.disk_partitions()} 
-        self.drive_monitor_timer.start()
+        try:
+            self.mounted_drives = {p.mountpoint for p in psutil.disk_partitions()}
+            self.drive_monitor_timer.start()
+        except Exception as e:
+            print(f"Could not start drive monitor: {e}")
         self.show()
 
     def _save_project_state(self):
@@ -459,60 +538,49 @@ class MainWindow(QMainWindow):
 
     def update_job_list(self):
         current_job_ids = {job['id'] for job in self.job_manager.get_all_jobs()}
-        
         items_to_remove = []
-        for job_id, widget in self.job_item_map.items():
+        for job_id in list(self.job_item_map.keys()):
             if job_id not in current_job_ids:
                 items_to_remove.append(job_id)
             else:
                 job_data = next((j for j in self.job_manager.get_all_jobs() if j['id'] == job_id), None)
-                if job_data:
-                    widget.update_status(job_data)
-
+                if job_data: self.job_item_map[job_id].update_status(job_data)
         for job_id in items_to_remove:
             for i in range(self.job_list.count()):
                 item = self.job_list.item(i)
-                widget = self.job_list.itemWidget(item)
-                if widget and widget.job_id == job_id:
+                if item and self.job_list.itemWidget(item).job_id == job_id:
                     self.job_list.takeItem(i)
+                    del self.job_item_map[job_id]
                     break
-            del self.job_item_map[job_id]
-
         for job in self.job_manager.get_all_jobs():
             if job['id'] not in self.job_item_map:
                 item = QListWidgetItem(self.job_list)
                 job_widget = JobListItem(job)
+                job_widget.remove_requested.connect(self.job_manager.remove_job_by_id)
                 item.setSizeHint(job_widget.sizeHint())
                 self.job_list.addItem(item)
                 self.job_list.setItemWidget(item, job_widget)
                 self.job_item_map[job['id']] = job_widget
-        
         self.job_list.setContextMenuPolicy(Qt.CustomContextMenu); self.job_list.customContextMenuRequested.connect(self.show_job_context_menu)
-        self.clear_completed_button.setVisible(bool(self.job_manager.completed_jobs))
-        self.save_session_report_button.setVisible(bool(self.job_manager.completed_jobs))
-        self.update_remove_button_state()
         
     def show_job_context_menu(self, pos: QPoint):
         item = self.job_list.itemAt(pos)
         if not item: return
         widget = self.job_list.itemWidget(item)
         if not widget: return
-        
         job_data = next((j for j in self.job_manager.get_all_jobs() if j['id'] == widget.job_id), None)
         if not job_data: return
-
-        menu = QMenu(self)
+        menu = QMenu(self); menu.setAttribute(Qt.WA_DeleteOnClose)
         if job_data in self.job_manager.completed_jobs and 'report' in job_data:
             menu.addAction("Save PDF Report", lambda: self.report_manager.save_pdf_report(job_data['report']))
             if job_data.get("job_type") != "mhl_verify":
                 menu.addAction("Save MHL Manifest", lambda: self.report_manager.save_mhl_manifest(job_data['report']))
                 menu.addAction("Save CSV Log", lambda: self.report_manager.save_csv_log(job_data['report']))
             menu.addSeparator()
-
         if job_data.get('status') == 'Completed' and job_data.get("job_type") != "mhl_verify":
             menu.addAction("Run Post-Processing", lambda: self.job_manager.run_post_process_for_job(job_data))
-
-        if menu.actions(): menu.exec(self.job_list.mapToGlobal(pos))
+        if menu.actions():
+            menu.exec(self.job_list.mapToGlobal(pos))
             
     def _show_ejection_dialog(self, sources):
         source_names = "\n".join([f"- {os.path.basename(p)}" for p in sources])
@@ -521,59 +589,36 @@ class MainWindow(QMainWindow):
             for path in sources: self.on_eject_requested(path)
 
     def show_mhl_verify_report(self, report_data):
-        msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("MHL Verification Issues")
-        msg_box.setIcon(QMessageBox.Warning)
-        
-        summary = (f"Verification completed with {report_data['failed_count']} failed checksum(s) "
-                   f"and {report_data['missing_count']} missing file(s).")
-        
+        msg_box = QMessageBox(self); msg_box.setWindowTitle("MHL Verification Issues"); msg_box.setIcon(QMessageBox.Warning)
+        summary = (f"Verification completed with {report_data['failed_count']} failed checksum(s) " f"and {report_data['missing_count']} missing file(s).")
         details = ""
         failed_files = [f for f in report_data['files'] if f['status'] == 'FAILED']
         missing_files = [f for f in report_data['files'] if f['status'] == 'Missing']
-
         if failed_files:
             details += "<b>Failed Checksums:</b>\n"
-            for f in failed_files:
-                details += f"• {os.path.basename(f['path'])}\n"
-        
+            for f in failed_files: details += f"• {os.path.basename(f['path'])}\n"
         if missing_files:
             details += "\n<b>Missing Files:</b>\n"
-            for f in missing_files:
-                details += f"• {os.path.basename(f['path'])}\n"
-        
-        msg_box.setText(summary)
-        msg_box.setInformativeText("See details below. A full PDF report can also be saved.")
-        
-        text_edit = QTextEdit()
-        text_edit.setHtml(details)
-        text_edit.setReadOnly(True)
-        text_edit.setMinimumHeight(150)
-        
-        grid_layout = msg_box.layout()
-        grid_layout.addWidget(text_edit, grid_layout.rowCount(), 0, 1, grid_layout.columnCount())
-
+            for f in missing_files: details += f"• {os.path.basename(f['path'])}\n"
+        msg_box.setText(summary); msg_box.setInformativeText("See details below. A full PDF report can also be saved.")
+        text_edit = QTextEdit(); text_edit.setHtml(details); text_edit.setReadOnly(True); text_edit.setMinimumHeight(150)
+        grid_layout = msg_box.layout(); grid_layout.addWidget(text_edit, grid_layout.rowCount(), 0, 1, grid_layout.columnCount())
         msg_box.exec()
 
     def save_session_report(self):
         if not self.job_manager.completed_jobs:
             QMessageBox.information(self, "No Jobs", "There are no completed jobs to report.")
             return
-        
         copy_jobs = [j for j in self.job_manager.completed_jobs if j.get("job_type", "copy") == "copy"]
         if not copy_jobs:
             QMessageBox.information(self, "No Copy Jobs", "Session reports can only be generated for copy jobs.")
             return
-
         consolidated_report = {'job_id': f"SESSION_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                               'start_time': copy_jobs[0]['report']['start_time'],
-                               'end_time': copy_jobs[-1]['report']['end_time'],
+                               'start_time': copy_jobs[0]['report']['start_time'], 'end_time': copy_jobs[-1]['report']['end_time'],
                                'sources': list(set(s for j in copy_jobs for s in j['report']['sources'])),
                                'destinations': list(set(d for j in copy_jobs for d in j['report']['destinations'])),
-                               'checksum_method': copy_jobs[0]['report']['checksum_method'],
-                               'files': [f for j in copy_jobs for f in j['report']['files']],
-                               'status': 'Session Complete',
-                               'total_size': sum(j['report']['total_size'] for j in copy_jobs)}
+                               'checksum_method': copy_jobs[0]['report']['checksum_method'], 'files': [f for j in copy_jobs for f in j['report']['files']],
+                               'status': 'Session Complete', 'total_size': sum(j['report']['total_size'] for j in copy_jobs)}
         self.report_manager.save_pdf_report(consolidated_report)
 
     def get_settings_path(self): return os.path.join(PROJECTS_BASE_DIR, "settings.json")
@@ -608,7 +653,6 @@ class MainWindow(QMainWindow):
             self.global_settings = updated_settings["global"]
             self.job_manager.set_max_concurrent_jobs(self.global_settings.get("concurrent_jobs", 1))
             self.save_settings()
-
             if is_project_loaded:
                 self.naming_preset = updated_settings["naming_preset"]
                 self.update_folder_creation_mode()
@@ -633,8 +677,7 @@ class MainWindow(QMainWindow):
         if path in self.recent_projects: self.recent_projects.remove(path)
         self.recent_projects.insert(0, path); self.recent_projects = self.recent_projects[:5]
         self.global_settings["last_project"] = path
-        self._populate_recent_menu()
-        self.save_settings()
+        self._populate_recent_menu(); self.save_settings()
         
     def _populate_recent_menu(self):
         self.recent_menu.clear()
@@ -651,7 +694,7 @@ class MainWindow(QMainWindow):
             path = action.data()
             if os.path.exists(path): self._load_project(path)
             else:
-                QMessageBox.warning(self, "Project Not Found", "The project path could not be found. It may have been moved or deleted.")
+                QMessageBox.warning(self, "Project Not Found", "The project path could not be found.")
                 self.recent_projects.remove(path); self._populate_recent_menu()
 
     def show_mhl_verify_dialog(self):
@@ -661,60 +704,33 @@ class MainWindow(QMainWindow):
 
     def on_mhl_job_add_requested(self, mhl_path, target_dir):
         job_id = f"Job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.job_manager.get_all_jobs()) + 1}"
-        job = {
-            "id": job_id,
-            "job_type": "mhl_verify",
-            "mhl_file": mhl_path,
-            "target_dir": target_dir,
-            "status": "Queued"
-        }
+        job = {"id": job_id, "job_type": "mhl_verify", "mhl_file": mhl_path, "target_dir": target_dir, "status": "Queued"}
         self.job_manager.add_job_to_queue(job)
 
     def save_job_template(self):
         default_name = f"{os.path.basename(self.project_path or 'Untitled')}_Template.dittemplate"
         file_path, _ = QFileDialog.getSaveFileName(self, "Save Job Template", default_name, "DIT Templates (*.dittemplate)")
-        if not file_path:
-            return
-
-        template_data = {
-            "destinations": self.dest_frame.path_list.get_all_paths(),
-            "checksum_method": self.checksum_combo.currentText(),
-            "create_source_folder": self.create_source_folder_checkbox.isChecked(),
-            "eject_on_completion": self.eject_checkbox.isChecked(),
-            "skip_existing": self.skip_existing_checkbox.isChecked(),
-            "resume_partial": self.resume_checkbox.isChecked()
-        }
-
+        if not file_path: return
+        template_data = { "destinations": self.dest_frame.path_list.get_all_paths(), "checksum_method": self.checksum_combo.currentText(), "create_source_folder": self.create_source_folder_checkbox.isChecked(), "eject_on_completion": self.eject_checkbox.isChecked(), "skip_existing": self.skip_existing_checkbox.isChecked(), "resume_partial": self.resume_checkbox.isChecked() }
         try:
-            with open(file_path, 'w') as f:
-                json.dump(template_data, f, indent=2)
+            with open(file_path, 'w') as f: json.dump(template_data, f, indent=2)
             QMessageBox.information(self, "Success", "Job template saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save template: {e}")
 
     def load_job_template(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Load Job Template", "", "DIT Templates (*.dittemplate)")
-        if not file_path:
-            return
-
+        if not file_path: return
         try:
-            with open(file_path, 'r') as f:
-                template_data = json.load(f)
-
-            self.source_frame.path_list.clear()
-            self.dest_frame.path_list.clear()
-
-            for path in template_data.get("destinations", []):
-                self.dest_frame.path_list.add_path(path)
-            
+            with open(file_path, 'r') as f: template_data = json.load(f)
+            self.source_frame.path_list.clear(); self.dest_frame.path_list.clear()
+            for path in template_data.get("destinations", []): self.dest_frame.path_list.add_path(path)
             self.checksum_combo.setCurrentText(template_data.get("checksum_method", "xxHash (Fast)"))
             self.create_source_folder_checkbox.setChecked(template_data.get("create_source_folder", True))
             self.eject_checkbox.setChecked(template_data.get("eject_on_completion", False))
             self.skip_existing_checkbox.setChecked(template_data.get("skip_existing", True))
             self.resume_checkbox.setChecked(template_data.get("resume_partial", True))
-            
             QMessageBox.information(self, "Success", "Job template loaded. Please add your source drives.")
-
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load template: {e}")
 
@@ -723,19 +739,21 @@ class MainWindow(QMainWindow):
         if self.job_manager.is_running:
             reply = QMessageBox.question(self, "Exit Confirmation", "A transfer is in progress. Are you sure you want to exit?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
-                self.job_manager.cancel_queue()
-                event.accept()
+                self.job_manager.cancel_queue(); event.accept()
             else: event.ignore()
         else: event.accept()
 
 if __name__ == '__main__':
-    # --- START MODIFICATION ---
-    # Necessary for PyInstaller and multiprocessing on macOS/Windows
     multiprocessing.freeze_support()
-    # --- END MODIFICATION ---
-
-    if not os.path.exists(PROJECTS_BASE_DIR): os.makedirs(PROJECTS_BASE_DIR)
+    
+    if not os.path.exists(PROJECTS_BASE_DIR):
+        os.makedirs(PROJECTS_BASE_DIR)
+        
     app = QApplication(sys.argv)
+    
+    resources_rc.qInitResources()
+
     app.setStyle("Fusion")
     window = MainWindow()
+    window.show()
     sys.exit(app.exec())

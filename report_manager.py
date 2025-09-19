@@ -14,30 +14,53 @@ from reportlab.lib import colors
 
 from config import APP_NAME, APP_VERSION, FFMPEG_PATH, FFPROBE_PATH
 from utils import format_bytes
-from workers import PostProcessWorker
+from workers import PostProcessWorker, ReportWorker
 
 class ReportManager:
     """ Handles generation of all report types (PDF, MHL, CSV). """
     def __init__(self, window):
         self.window = window
+        self.report_worker = None
 
     def save_pdf_report(self, report):
         default_name = f"{os.path.basename(self.window.project_path)}_{report['job_id']}_Report.pdf"
         file_path, _ = QFileDialog.getSaveFileName(self.window, "Save PDF Report", default_name, "PDF Files (*.pdf)")
-        if not file_path: return
+        if not file_path:
+            return
 
-        # Check report type and route to the correct generator
+        # Choose which PDF generation method to run in the background
         if 'mhl_file' in report:
-            self._save_mhl_verify_pdf(report, file_path)
+            generator_func = self._build_mhl_verify_pdf
         else:
-            self._save_copy_pdf(report, file_path)
+            # For copy reports, we need to get the "Shoot Day" from the user first
+            shoot_day, ok = QInputDialog.getText(self.window, "Shoot Day", "Enter Shoot Day / Date (optional):")
+            if not ok:
+                return
+            # We pass shoot_day as extra context to the builder function
+            generator_func = lambda r, p: self._build_copy_pdf(r, p, shoot_day)
+        
+        # --- UI Feedback and Worker Creation ---
+        self.window.show_status_message(f"Generating PDF report for {report['job_id']}...", 0)
+        
+        # The worker will run the chosen generator_func in the background
+        self.report_worker = ReportWorker(generator_func, report, file_path)
+        self.report_worker.finished.connect(self.on_report_finished)
+        self.report_worker.start()
 
-    def _save_mhl_verify_pdf(self, report, file_path):
+    def on_report_finished(self, success, file_path, error_message):
+        self.window.clear_status_message()
+        if success:
+            QMessageBox.information(self.window, "Success", f"PDF report saved successfully to:\n{file_path}")
+        else:
+            QMessageBox.critical(self.window, "PDF Generation Error", f"Could not generate PDF report:\n{error_message}")
+        self.report_worker = None
+
+    def _build_mhl_verify_pdf(self, report, file_path):
+        """ This method now contains ONLY the ReportLab logic, to be run by the worker. """
         doc = SimpleDocTemplate(file_path, pagesize=letter)
         styles = getSampleStyleSheet()
         story = []
         
-        # --- MHL Report Header ---
         story.append(Paragraph("MHL Verification Report", styles['h1']))
         story.append(Paragraph(f"Job ID: {report['job_id']}", styles['h3']))
         story.append(Spacer(1, 12))
@@ -54,7 +77,6 @@ class ReportManager:
         story.append(info_table)
         story.append(Spacer(1, 12))
 
-        # --- Summary Section ---
         summary_style = TableStyle([('BOX', (0,0), (-1,-1), 1, colors.black), ('GRID', (0,0), (-1,-1), 0.5, colors.grey)])
         summary_data = [
             [f"Verified Files: {report['verified_count']}",
@@ -66,7 +88,6 @@ class ReportManager:
         story.append(summary_table)
         story.append(PageBreak())
 
-        # --- File Lists ---
         failed_files = [f for f in report['files'] if f['status'] == 'FAILED']
         missing_files = [f for f in report['files'] if f['status'] == 'Missing']
 
@@ -84,16 +105,10 @@ class ReportManager:
                 story.append(Paragraph(f['path'], styles['Code']))
             story.append(Spacer(1, 12))
 
-        try:
-            doc.build(story)
-            QMessageBox.information(self.window, "Success", f"PDF report saved to {file_path}")
-        except Exception as e:
-            QMessageBox.critical(self.window, "PDF Error", f"Could not generate PDF: {e}")
+        doc.build(story)
 
-    def _save_copy_pdf(self, report, file_path):
-        shoot_day, ok = QInputDialog.getText(self.window, "Shoot Day", "Enter Shoot Day / Date (optional):")
-        if not ok: return
-
+    def _build_copy_pdf(self, report, file_path, shoot_day=""):
+        """ This method now contains ONLY the ReportLab logic for copy jobs. """
         doc = SimpleDocTemplate(file_path, pagesize=letter); styles = getSampleStyleSheet(); story = []
         
         prod_title = self.window.global_settings.get("production_title", os.path.basename(self.window.project_path))
@@ -172,16 +187,15 @@ class ReportManager:
                 story.append(Spacer(1, 6)); story.append(dest_table); story.append(Spacer(1, 24))
 
             doc.build(story)
-            QMessageBox.information(self.window, "Success", f"PDF report saved to {file_path}")
-        except Exception as e:
-            QMessageBox.critical(self.window, "PDF Error", f"Could not generate PDF: {e}")
         finally:
             for thumb in temp_thumbs:
                 if thumb and os.path.exists(thumb):
                     try: os.remove(thumb)
                     except OSError: pass
 
+    # (The rest of the class, _generate_additional_thumbs, save_mhl_manifest, and save_csv_log, remains unchanged)
     def _generate_additional_thumbs(self, video_path, count=4, thumb_size=(160,90)):
+        # ... (implementation is the same)
         try:
             creationflags = subprocess.CREATE_NO_WINDOW if platform.system() == "Windows" else 0
             cmd = [FFPROBE_PATH, "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", video_path]
@@ -208,6 +222,7 @@ class ReportManager:
             return []
 
     def save_mhl_manifest(self, report):
+        # ... (implementation is the same)
         default_name = f"{os.path.basename(self.window.project_path)}_{report['job_id']}.mhl"
         file_path, _ = QFileDialog.getSaveFileName(self.window, "Save MHL Manifest", default_name, "MHL Files (*.mhl)")
         if not file_path: return
@@ -228,6 +243,7 @@ class ReportManager:
         QMessageBox.information(self.window, "Success", f"MHL manifest saved to {file_path}")
         
     def save_csv_log(self, report):
+        # ... (implementation is the same)
         default_name = f"{os.path.basename(self.window.project_path)}_{report['job_id']}_Log.csv"
         file_path, _ = QFileDialog.getSaveFileName(self.window, "Save CSV Log", default_name, "CSV Files (*.csv)")
         if not file_path: return

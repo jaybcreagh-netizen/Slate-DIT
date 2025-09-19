@@ -16,6 +16,11 @@ from PySide6.QtCore import QThread, Signal
 
 from config import FFMPEG_PATH, FFPROBE_PATH
 from utils import check_command, resolve_path_template
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from utils import format_bytes, check_command, resolve_path_template 
 
 class ScanWorker(QThread):
     """
@@ -495,3 +500,30 @@ class MHLVerifyWorker(QThread):
     def pause(self): self.is_paused = True
     def resume(self): self.is_paused = False
     def cancel(self): self.is_cancelled = True; self.is_paused = False
+
+    # ... (at the end of workers.py, after MHLVerifyWorker)
+
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from utils import format_bytes
+
+class ReportWorker(QThread):
+    """ Generates a PDF report in a background thread to avoid freezing the UI. """
+    finished = Signal(bool, str, str)  # success, file_path, error_message
+
+    def __init__(self, report_generator_func, report_data, file_path, parent=None):
+        super().__init__(parent)
+        self.report_generator_func = report_generator_func
+        self.report_data = report_data
+        self.file_path = file_path
+
+    def run(self):
+        try:
+            # The report_generator_func is the method from ReportManager that contains
+            # all the reportlab logic. This worker just executes it off the main thread.
+            self.report_generator_func(self.report_data, self.file_path)
+            self.finished.emit(True, self.file_path, "")
+        except Exception as e:
+            self.finished.emit(False, self.file_path, str(e))

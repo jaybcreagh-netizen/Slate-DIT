@@ -2,13 +2,31 @@
 import os
 import platform
 import subprocess
+import sys
 from datetime import datetime
 import psutil
 import qtawesome as qta
+from PySide6.QtGui import QIcon
+
+def get_icon(name, fallback_name, color=None):
+    """
+    Gets a native SF Symbol on macOS if available, otherwise a Font Awesome icon.
+    The color parameter is only applied to the Font Awesome fallback.
+    """
+    if sys.platform == "darwin":
+        # QIcon.fromTheme() automatically finds SF Symbols by their name
+        # when the Info.plist key is set during the PyInstaller build.
+        return QIcon.fromTheme(name)
+    else:
+        # Provide a fallback for non-macOS platforms
+        return qta.icon(fallback_name, color=color)
 
 def get_icon_for_path(path):
-    if os.path.ismount(path): return qta.icon("fa5s.hdd", color="silver")
-    return qta.icon("fa5s.folder", color="orange")
+    is_mount = os.path.ismount(path)
+    if is_mount:
+        return get_icon("externaldrive.fill", "fa5s.hdd", color="silver")
+    else:
+        return get_icon("folder.fill", "fa5s.folder", color="#ff9f0a") # Use orange for consistency
 
 def format_bytes(byte_count):
     if byte_count is None: return "N/A"
