@@ -4,3 +4,5 @@ xxhash
 qtawesome
 reportlab
 opencv-python
+Pillow
+rawpy

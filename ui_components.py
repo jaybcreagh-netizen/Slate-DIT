@@ -6,7 +6,7 @@ import subprocess
 
 import psutil
 import qtawesome as qta
-from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, QEasingCurve, Property, QEvent, QParallelAnimationGroup
+from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, QEasingCurve, Property, QEvent, QParallelAnimationGroup, QPoint
 from PySide6.QtGui import QMouseEvent, QFont, QAction, QPainter, QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame,
@@ -17,97 +17,230 @@ from PySide6.QtWidgets import (
 )
 
 from utils import get_icon, get_icon_for_path, format_bytes, format_eta, resolve_path_template
-from models import Job, JobStatus
 
 class ToggleSwitch(QWidget):
     toggled = Signal(bool)
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(44, 24); self.setCursor(Qt.PointingHandCursor); self.setToolTip("Toggle")
+        self.setFixedSize(44, 24)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Toggle")
         self._checked = False
-        self._inactive_color = QColor("#3e3e42"); self._active_color = QColor("#007aff"); self._disabled_color = QColor("#555")
-        self._knob_color = QColor("#f0f0f0"); self._disabled_knob_color = QColor("#999")
-        self._knob_position = 3.0; self._background_color = self._inactive_color
-        self.pos_animation = QPropertyAnimation(self, b"knob_position"); self.pos_animation.setDuration(350); self.pos_animation.setEasingCurve(QEasingCurve.OutBack)
-        self.color_animation = QPropertyAnimation(self, b"background_color_prop"); self.color_animation.setDuration(250); self.color_animation.setEasingCurve(QEasingCurve.InOutQuad)
-        self.animation_group = QParallelAnimationGroup(self); self.animation_group.addAnimation(self.pos_animation); self.animation_group.addAnimation(self.color_animation)
+        
+        # --- START REFACTOR: Remove hardcoded styles ---
+        # These properties will now be set by the style.qss file via qproperty.
+        # We initialize them to basic colors as fallbacks.
+        self._inactive_color = QColor(Qt.darkGray)
+        self._active_color = QColor(Qt.blue)
+        self._disabled_color = QColor(Qt.gray)
+        self._knob_color = QColor(Qt.white)
+        self._disabled_knob_color = QColor(Qt.lightGray)
+        self._track_indent_color = QColor(Qt.black) 
+        # --- END REFACTOR ---
+
+        self._knob_position = 3.0
+        self._background_color = self._inactive_color
+        self.pos_animation = QPropertyAnimation(self, b"knob_position")
+        self.pos_animation.setDuration(350)
+        self.pos_animation.setEasingCurve(QEasingCurve.OutBack)
+        self.color_animation = QPropertyAnimation(self, b"background_color_prop")
+        self.color_animation.setDuration(250)
+        self.color_animation.setEasingCurve(QEasingCurve.InOutQuad)
+        self.animation_group = QParallelAnimationGroup(self)
+        self.animation_group.addAnimation(self.pos_animation)
+        self.animation_group.addAnimation(self.color_animation)
+        self.toggled.connect(self.setChecked)
         self._update_visuals(animated=False)
+        
+    # These @Property decorators are what allow QSS to access the attributes
+    @Property(QColor)
+    def inactive_color(self): return self._inactive_color
+    @inactive_color.setter
+    def inactive_color(self, value): self._inactive_color = value
+    @Property(QColor)
+    def active_color(self): return self._active_color
+    @active_color.setter
+    def active_color(self, value): self._active_color = value
+    @Property(QColor)
+    def disabled_color(self): return self._disabled_color
+    @disabled_color.setter
+    def disabled_color(self, value): self._disabled_color = value
+    @Property(QColor)
+    def knob_color(self): return self._knob_color
+    @knob_color.setter
+    def knob_color(self, value): self._knob_color = value
+    @Property(QColor)
+    def disabled_knob_color(self): return self._disabled_knob_color
+    @disabled_knob_color.setter
+    def disabled_knob_color(self, value): self._disabled_knob_color = value
+    @Property(QColor)
+    def track_indent_color(self): return self._track_indent_color
+    @track_indent_color.setter
+    def track_indent_color(self, value): self._track_indent_color = value
+        
     @Property(float)
     def knob_position(self): return self._knob_position
     @knob_position.setter
-    def knob_position(self, value): self._knob_position = value; self.update()
+    def knob_position(self, value):
+        self._knob_position = value
+        self.update()
     @Property(QColor)
     def background_color_prop(self): return self._background_color
     @background_color_prop.setter
-    def background_color_prop(self, color): self._background_color = color; self.update()
+    def background_color_prop(self, color):
+        self._background_color = color
+        self.update()
     def isChecked(self): return self._checked
     def setChecked(self, checked):
-        if self._checked == checked: return
-        self._checked = checked; self._update_visuals(); self.toggled.emit(self._checked)
+        if self._checked == checked:
+            return
+        self._checked = checked
+        self._update_visuals()
+        self.toggled.emit(self._checked)
     def _update_visuals(self, animated=True):
         pos_target = 21.0 if self._checked else 3.0
         color_target = self._active_color if self._checked else self._inactive_color
         if animated:
-            self.animation_group.stop(); self.pos_animation.setEndValue(pos_target); self.color_animation.setEndValue(color_target); self.animation_group.start()
+            self.animation_group.stop()
+            self.pos_animation.setEndValue(pos_target)
+            self.color_animation.setEndValue(color_target)
+            self.animation_group.start()
         else:
-            self.knob_position = pos_target; self.background_color_prop = color_target
-    def mousePressEvent(self, e: QMouseEvent): e.accept(); self.setChecked(not self.isChecked())
+            self.knob_position = pos_target
+            self.background_color_prop = color_target
+    def mousePressEvent(self, e: QMouseEvent):
+        e.accept()
+        self.setChecked(not self.isChecked())
     def paintEvent(self, event):
-        painter = QPainter(self); painter.setRenderHint(QPainter.Antialiasing)
-        bg_color = self._background_color; knob_color = self._knob_color
-        if not self.isEnabled(): bg_color = self._disabled_color; knob_color = self._disabled_knob_color
-        painter.setPen(Qt.NoPen); painter.setBrush(QBrush(bg_color))
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        bg_color = self._background_color
+        knob_color = self._knob_color
+        if not self.isEnabled():
+            bg_color = self._disabled_color
+            knob_color = self._disabled_knob_color
+        painter.setPen(Qt.NoPen)
+        if not self.isChecked():
+            painter.setBrush(QBrush(self._track_indent_color))
+            painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
+        painter.setBrush(QBrush(bg_color))
         painter.drawRoundedRect(0, 0, self.width(), self.height(), 12, 12)
-        painter.setBrush(QBrush(knob_color)); painter.drawEllipse(int(self.knob_position), 3, 18, 18)
+        painter.setBrush(QBrush(knob_color))
+        painter.drawEllipse(int(self.knob_position), 3, 18, 18)
+
+# ... (Rest of the file is unchanged)
+class ModernDropdown(QPushButton):
+    currentIndexChanged = Signal(int)
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setText("Select an option")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setObjectName("ModernDropdown")
+        self._items = []
+        self._current_index = -1
+        self.menu = QMenu(self)
+        self.menu.setObjectName("ModernDropdownMenu")
+        self.menu.triggered.connect(self._on_item_selected)
+        self.clicked.connect(self.show_menu)
+    def addItems(self, items):
+        self._items = list(items)
+        self.menu.clear()
+        for item_text in self._items:
+            self.menu.addAction(item_text)
+        if self._items:
+            self.setCurrentIndex(0)
+    def show_menu(self):
+        point = self.mapToGlobal(QPoint(0, self.height()))
+        self.menu.exec(point)
+    def _on_item_selected(self, action):
+        try:
+            index = self._items.index(action.text())
+            self.setCurrentIndex(index)
+        except ValueError:
+            pass
+    def setCurrentIndex(self, index):
+        if 0 <= index < len(self._items) and self._current_index != index:
+            self._current_index = index
+            self.setText(self._items[index])
+            self.currentIndexChanged.emit(index)
+    def currentIndex(self):
+        return self._current_index
+    def currentText(self):
+        if 0 <= self._current_index < len(self._items):
+            return self._items[self._current_index]
+        return ""
 
 class JobListItem(QWidget):
     remove_requested = Signal(str)
-    def __init__(self, job: Job, parent=None):
+    def __init__(self, job_data, parent=None):
         super().__init__(parent)
-        self.job_id = job.id; self.job = job
-        main_layout = QHBoxLayout(self); main_layout.setContentsMargins(12, 10, 12, 10); main_layout.setSpacing(10)
+        self.job_id = job_data['id']
+        self.job_data = job_data
+        main_layout = QHBoxLayout(self)
+        main_layout.setContentsMargins(12, 10, 12, 10)
+        main_layout.setSpacing(10)
         self.status_icon = QLabel()
-        self.job_label = QLabel(); self.job_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred); self.job_label.setWordWrap(False)
+        self.job_label = QLabel()
+        self.job_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.job_label.setWordWrap(False)
         self.remove_button = QPushButton(get_icon("xmark", "fa5s.times", color="gray"), "")
-        self.remove_button.setFixedSize(20, 20); self.remove_button.setStyleSheet("background-color: transparent; border-radius: 10px;"); self.remove_button.setCursor(Qt.PointingHandCursor)
-        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.job_id)); self.remove_button.hide()
-        main_layout.addWidget(self.status_icon); main_layout.addWidget(self.job_label, 1); main_layout.addStretch(); main_layout.addWidget(self.remove_button)
-        self.update_status(job)
+        self.remove_button.setFixedSize(20, 20)
+        self.remove_button.setObjectName("ToolbarButton")
+        self.remove_button.setStyleSheet("background-color: transparent;")
+        self.remove_button.setCursor(Qt.PointingHandCursor)
+        self.remove_button.clicked.connect(lambda: self.remove_requested.emit(self.job_id))
+        self.remove_button.hide()
+        main_layout.addWidget(self.status_icon)
+        main_layout.addWidget(self.job_label, 1)
+        main_layout.addStretch()
+        main_layout.addWidget(self.remove_button)
+        self.update_status(job_data)
     def enterEvent(self, event):
-        if self.job.status in [JobStatus.QUEUED, JobStatus.COMPLETED, JobStatus.CANCELLED, JobStatus.PROCESSED, JobStatus.COMPLETED_WITH_ERRORS]:
+        if self.job_data.get('status') in ['Queued', 'Completed', 'Cancelled', 'Processed', 'Completed with errors']:
              self.remove_button.show()
         super().enterEvent(event)
-    def leaveEvent(self, event): self.remove_button.hide(); super().leaveEvent(event)
-    def update_status(self, job: Job):
-        self.job = job
-        status_name = job.status.name.replace('_', ' ').title()
-        if job.job_type == "mhl_verify":
-            item_text = f"<b>MHL Verify:</b> {os.path.basename(job.mhl_file)}"
+    def leaveEvent(self, event):
+        self.remove_button.hide()
+        super().leaveEvent(event)
+    def update_status(self, job_data):
+        self.job_data = job_data
+        status = job_data['status']
+        item_text = ""
+        tooltip_text = f"<b>Job ID:</b> {job_data['id']}<br><b>Status:</b> {status}"
+        if job_data.get("job_type") == "mhl_verify":
+            job_name = os.path.basename(job_data['mhl_file'])
+            item_text = f"<b>MHL Verify:</b> {job_name}"
+            tooltip_text += f"<br><b>MHL File:</b> {job_data['mhl_file']}"
+            tooltip_text += f"<br><b>Target:</b> {job_data['target_dir']}"
         else:
-            source_text = os.path.basename(job.sources[0]) if job.sources else "N/A"
-            if len(job.sources) > 1: source_text += f" (+{len(job.sources) - 1})"
-            dest_text = os.path.basename(job.destinations[0]) if job.destinations else "N/A"
-            if len(job.destinations) > 1: dest_text += f" (+{len(job.destinations) - 1})"
+            sources = job_data.get('sources', [])
+            source_text = os.path.basename(sources[0]) if sources else "N/A"
+            if len(sources) > 1:
+                source_text += f" (+{len(sources) - 1})"
+            dests = job_data.get('destinations', [])
+            dest_text = os.path.basename(dests[0]) if dests else "N/A"
+            if len(dests) > 1:
+                dest_text += f" (+{len(dests) - 1})"
             item_text = f"<b>{source_text}</b> &rarr; {dest_text}"
+            if sources:
+                tooltip_text += "<br><br><b>Sources:</b><ul>" + "".join(f"<li>{s}</li>" for s in sources) + "</ul>"
+            if dests:
+                tooltip_text += "<b>Destinations:</b><ul>" + "".join(f"<li>{d}</li>" for d in dests) + "</ul>"
         fm = self.job_label.fontMetrics()
         elided_text = fm.elidedText(item_text, Qt.ElideRight, self.job_label.width())
         self.job_label.setText(elided_text)
-        status_map = {
-            JobStatus.PROCESSED: ("#4CAF50", "checkmark.seal.fill", "fa5s.check-double"),
-            JobStatus.COMPLETED: ("#4CAF50", "checkmark.circle.fill", "fa5s.check-circle"),
-            JobStatus.POST_PROCESSING: ("#9C27B0", "film.fill", "fa5s.film"),
-            JobStatus.RUNNING: ("#00BCD4", "gearshape.2.fill", "fa5s.cogs"),
-            JobStatus.CANCELLED: ("#FF9800", "xmark.octagon.fill", "fa5s.ban"),
-            JobStatus.QUEUED: ("gray", "clock.fill", "fa5s.clock"),
-            JobStatus.COMPLETED_WITH_ERRORS: ("#FF9800", "exclamationmark.triangle.fill", "fa5s.exclamation-triangle"),
-        }
-        color, sfs_name, fa_name = status_map.get(job.status, ("#F44336", "exclamationmark.triangle.fill", "fa5s.exclamation-circle"))
-        icon = get_icon(sfs_name, fa_name, color=color)
+        self.setToolTip(tooltip_text)
+        colors = {"Processed": "#4CAF50", "Completed": "#4CAF50", "Post-processing": "#9C27B0", "Running": "#00BCD4", "Cancelled": "#FF9800", "Queued": "gray", "Completed with errors": "#FF9800"}
+        icon_color = next((colors[s] for s in colors if s in status), "#F44336")
+        icons = { "Processed": ("checkmark.seal.fill", "fa5s.check-double"), "Post-processing": ("film.fill", "fa5s.film"), "Completed": ("checkmark.circle.fill", "fa5s.check-circle"), "Running": ("gearshape.2.fill", "fa5s.cogs"), "Cancelled": ("xmark.octagon.fill", "fa5s.ban"), "Queued": ("clock.fill", "fa5s.clock"), "Completed with errors": ("exclamationmark.triangle.fill", "fa5s.exclamation-triangle")}
+        sfs_name, fa_name = icons.get(next((s for s in icons if s in status), "default"), ("exclamationmark.triangle.fill", "fa5s.exclamation-circle"))
+        icon = get_icon(sfs_name, fa_name, color=icon_color)
         self.status_icon.setPixmap(icon.pixmap(QSize(18, 18)))
-        if sys.platform == "darwin": self.status_icon.setStyleSheet(f"color: {color};")
+        if sys.platform == "darwin": self.status_icon.setStyleSheet(f"color: {icon_color};")
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, 'job'): self.update_status(self.job)
+        if hasattr(self, 'job_data'):
+            self.update_status(self.job_data)
 
 class PathListItem(QWidget):
     remove_clicked = Signal(str)
@@ -146,6 +279,7 @@ class PathListItem(QWidget):
         raw_name = os.path.basename(self.path) or self.path
         elided_name_text = fm_name.elidedText(raw_name, Qt.ElideRight, self.name_label.width())
         self.name_label.setText(f"<b>{elided_name_text}</b>")
+
 class PathListWidget(QListWidget):
     metadata_requested = Signal(str)
     eject_requested = Signal(str)
@@ -197,6 +331,7 @@ class PathListWidget(QListWidget):
             else: subprocess.run(["xdg-open", path])
         except Exception as e:
             print(f"Error opening path {path}: {e}")
+
 class AnimatedPathListWidget(PathListWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -228,6 +363,7 @@ class AnimatedPathListWidget(PathListWidget):
                 self.anim_out.setEasingCurve(QEasingCurve.InOutQuad)
                 self.anim_out.finished.connect(lambda p=path_to_remove: self.remove_path(p))
                 self.anim_out.start(QPropertyAnimation.DeleteWhenStopped); break
+
 class DropFrame(QFrame):
     def __init__(self, title, parent=None):
         super().__init__(parent)
@@ -262,16 +398,20 @@ class DropFrame(QFrame):
     def _on_add_clicked(self):
         path = QFileDialog.getExistingDirectory(self, f"Select a {self.title_label.text().lower()}")
         if path: self.path_list.add_path(path)
-    def mouseDoubleClickEvent(self, event: QMouseEvent): self._on_add_clicked(); super().mouseDoubleClickEvent(event)
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        self._on_add_clicked()
+        super().mouseDoubleClickEvent(event)
     def dragEnterEvent(self, event: QMouseEvent):
         if event.mimeData().hasUrls(): event.acceptProposedAction()
-    def dragLeaveEvent(self, event: QMouseEvent): event.accept()
+    def dragLeaveEvent(self, event: QMouseEvent):
+        event.accept()
     def dropEvent(self, event: QMouseEvent):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
                 if os.path.isdir(url.toLocalFile()): self.path_list.add_path(url.toLocalFile())
             event.acceptProposedAction()
         else: event.ignore()
+
 class MHLVerifyDialog(QDialog):
     add_job_requested = Signal(str, str)
     def __init__(self, parent=None):
@@ -284,6 +424,7 @@ class MHLVerifyDialog(QDialog):
         self.mhl_path_edit = QLineEdit()
         self.mhl_path_edit.setPlaceholderText("Select the .mhl manifest file")
         browse_mhl_btn = QPushButton("Browse...")
+        browse_mhl_btn.setObjectName("ToolbarButton")
         browse_mhl_btn.clicked.connect(self.browse_mhl)
         mhl_layout = QHBoxLayout()
         mhl_layout.addWidget(self.mhl_path_edit)
@@ -292,12 +433,14 @@ class MHLVerifyDialog(QDialog):
         self.target_dir_edit = QLineEdit()
         self.target_dir_edit.setPlaceholderText("Select the root directory to verify")
         browse_dir_btn = QPushButton("Browse...")
+        browse_dir_btn.setObjectName("ToolbarButton")
         browse_dir_btn.clicked.connect(self.browse_dir)
         dir_layout = QHBoxLayout()
         dir_layout.addWidget(self.target_dir_edit)
         dir_layout.addWidget(browse_dir_btn)
         layout.addRow(QLabel("<b>Target Directory:</b>"), dir_layout)
         self.add_button = QPushButton(get_icon("plus.circle", "fa5s.plus-circle", color="white"), " Add Job to Queue")
+        self.add_button.setObjectName("PrimaryButton")
         self.add_button.clicked.connect(self.add_job)
         self.add_button.setEnabled(False)
         layout.addRow("", self.add_button)
@@ -316,6 +459,7 @@ class MHLVerifyDialog(QDialog):
     def add_job(self):
         self.add_job_requested.emit(self.mhl_path_edit.text(), self.target_dir_edit.text())
         self.accept()
+
 class ProjectManagerDialog(QDialog):
     project_selected = Signal(str)
     new_project_requested = Signal()
@@ -332,11 +476,11 @@ class ProjectManagerDialog(QDialog):
         self.recent_projects_paths = recent_projects
         layout.addWidget(self.project_list)
         buttons_layout = QHBoxLayout()
-        new_button = QPushButton("Create New Project"); new_button.clicked.connect(self.new_project_requested)
-        open_other_button = QPushButton("Open Other..."); open_other_button.clicked.connect(self.open_other)
-        open_selected_button = QPushButton("Open Selected"); open_selected_button.clicked.connect(self.open_selected)
+        new_button = QPushButton("Create New Project"); new_button.setObjectName("ToolbarButton"); new_button.clicked.connect(self.new_project_requested)
+        open_other_button = QPushButton("Open Other..."); open_other_button.setObjectName("ToolbarButton"); open_other_button.clicked.connect(self.open_other)
+        open_selected_button = QPushButton("Open Selected"); open_selected_button.setObjectName("PrimaryButton"); open_selected_button.clicked.connect(self.open_selected)
         open_selected_button.setDefault(True)
-        quit_button = QPushButton("Quit"); quit_button.clicked.connect(self.reject)
+        quit_button = QPushButton("Quit"); quit_button.setObjectName("ToolbarButton"); quit_button.clicked.connect(self.reject)
         buttons_layout.addWidget(new_button); buttons_layout.addWidget(open_other_button)
         buttons_layout.addStretch()
         buttons_layout.addWidget(open_selected_button); buttons_layout.addWidget(quit_button)
@@ -356,6 +500,7 @@ class ProjectManagerDialog(QDialog):
             self.accept()
         elif path:
             QMessageBox.warning(self, "Invalid Project", "The selected folder is not a valid project.")
+
 class SettingsDialog(QDialog):
     def __init__(self, global_settings, project_naming_preset, project_loaded, parent=None):
         super().__init__(parent)
@@ -378,8 +523,8 @@ class SettingsDialog(QDialog):
         self.naming_tab.setEnabled(project_loaded)
         if not project_loaded: self.tabs.setTabToolTip(2, "A project must be open to configure naming presets.")
         button_layout = QHBoxLayout()
-        save_button = QPushButton("Save"); save_button.clicked.connect(self.accept)
-        cancel_button = QPushButton("Cancel"); cancel_button.clicked.connect(self.reject)
+        save_button = QPushButton("Save"); save_button.setObjectName("PrimaryButton"); save_button.clicked.connect(self.accept)
+        cancel_button = QPushButton("Cancel"); cancel_button.setObjectName("ToolbarButton"); cancel_button.clicked.connect(self.reject)
         button_layout.addStretch()
         button_layout.addWidget(cancel_button); button_layout.addWidget(save_button)
         main_layout.addLayout(button_layout)
@@ -395,24 +540,15 @@ class SettingsDialog(QDialog):
         layout.addWidget(concurrency_group)
         transfer_group = QGroupBox("Transfer & Verification")
         form_layout_t = QFormLayout(transfer_group)
-        self.verification_mode_combo = QComboBox()
-        self.verification_mode_combo.addItem(get_icon("checkmark.shield.fill", "fa5s.check-double"), "Full (Hash Verification)")
-        self.verification_mode_combo.addItem(get_icon("ruler.fill", "fa5s.ruler-combined"), "File Size Check Only")
-        self.verification_mode_combo.addItem(get_icon("doc.on.doc.fill", "fa5s.copy"), "Copy Only (Unverified)")
-        self.verification_mode_combo.setItemData(0, "full")
-        self.verification_mode_combo.setItemData(1, "size")
-        self.verification_mode_combo.setItemData(2, "none")
+        self.verification_mode_combo = ModernDropdown()
+        self.verification_mode_combo.addItems(["Full (Hash Verification)", "File Size Check Only", "Copy Only (Unverified)"])
         self.defer_post_process_checkbox = ToggleSwitch()
         self.defer_post_process_checkbox.setToolTip("Run heavy tasks like thumbnail generation manually later.")
-        defer_layout = QHBoxLayout()
-        defer_layout.addWidget(self.defer_post_process_checkbox)
-        defer_layout.addWidget(QLabel("Defer post-processing"))
-        defer_layout.addStretch()
         form_layout_t.addRow("Verification Mode:", self.verification_mode_combo)
-        form_layout_t.addRow(defer_layout)
+        form_layout_t.addRow("Defer Post-Processing:", self.defer_post_process_checkbox)
         layout.addWidget(transfer_group)
-        index = self.verification_mode_combo.findData(self.global_settings.get("verification_mode", "full"))
-        if index != -1: self.verification_mode_combo.setCurrentIndex(index)
+        verify_map = {"full": 0, "size": 1, "none": 2}
+        self.verification_mode_combo.setCurrentIndex(verify_map.get(self.global_settings.get("verification_mode", "full")))
         self.defer_post_process_checkbox.setChecked(self.global_settings.get("defer_post_process", False))
         layout.addStretch()
     def _setup_pdf_tab(self):
@@ -426,29 +562,31 @@ class SettingsDialog(QDialog):
         logo_layout = QHBoxLayout()
         self.logo_path_label = QLabel(os.path.basename(self.global_settings.get("company_logo", "No logo selected")))
         self.logo_path_label.setStyleSheet("color: #999;")
-        select_logo_button = QPushButton("Select Logo..."); select_logo_button.clicked.connect(self.select_logo)
+        select_logo_button = QPushButton("Select Logo..."); select_logo_button.setObjectName("ToolbarButton"); select_logo_button.clicked.connect(self.select_logo)
         logo_layout.addWidget(self.logo_path_label); logo_layout.addStretch(); logo_layout.addWidget(select_logo_button)
         form_layout.addRow("Company Logo:", logo_layout)
         layout.addWidget(branding_group)
         layout_group = QGroupBox("Report Layout")
         layout_form = QFormLayout(layout_group)
-        self.thumb_mode_combo = QComboBox()
-        self.thumb_mode_combo.addItem(get_icon("photo.fill", "fa5s.image"), "Single Thumbnail")
-        self.thumb_mode_combo.addItem(get_icon("film.fill", "fa5s.film"), "Filmstrip (5)")
-        self.thumb_mode_combo.addItem(get_icon("photo.on.rectangle.angled", "fa5s.images"), "No Thumbnails")
-        self.thumb_mode_combo.setItemData(0, "single"); self.thumb_mode_combo.setItemData(1, "filmstrip"); self.thumb_mode_combo.setItemData(2, "none")
-        self.detail_level_combo = QComboBox()
-        self.detail_level_combo.addItem(get_icon("list.bullet.rectangle.fill", "fa5s.list-alt"), "Detailed")
-        self.detail_level_combo.addItem(get_icon("list.bullet", "fa5s.list"), "Simple")
-        self.detail_level_combo.setItemData(0, "detailed"); self.detail_level_combo.setItemData(1, "simple")
-        layout_form.addRow("Thumbnail Mode:", self.thumb_mode_combo)
-        layout_form.addRow("Detail Level:", self.detail_level_combo)
+        self.report_type_combo = ModernDropdown()
+        self.report_type_combo.addItems(["Detailed Transfer Report", "Contact Sheet"])
+        layout_form.addRow("Default PDF Report Type:", self.report_type_combo)
+        self.thumb_mode_label = QLabel("Thumbnail Mode (for Detailed Report):")
+        self.thumb_mode_combo = ModernDropdown()
+        self.thumb_mode_combo.addItems(["Single Thumbnail", "Filmstrip (5)", "No Thumbnails"])
+        layout_form.addRow(self.thumb_mode_label, self.thumb_mode_combo)
+        self.report_type_combo.currentIndexChanged.connect(self.on_report_type_changed)
         layout.addWidget(layout_group)
-        index_thumb = self.thumb_mode_combo.findData(self.global_settings.get("pdf_thumbnail_mode", "single"))
-        if index_thumb != -1: self.thumb_mode_combo.setCurrentIndex(index_thumb)
-        index_detail = self.detail_level_combo.findData(self.global_settings.get("pdf_detail_level", "detailed"))
-        if index_detail != -1: self.detail_level_combo.setCurrentIndex(index_detail)
+        report_map = {"detailed": 0, "contact_sheet": 1}
+        self.report_type_combo.setCurrentIndex(report_map.get(self.global_settings.get("pdf_report_type", "detailed")))
+        thumb_map = {"single": 0, "filmstrip": 1, "none": 2}
+        self.thumb_mode_combo.setCurrentIndex(thumb_map.get(self.global_settings.get("pdf_thumbnail_mode", "single")))
+        self.on_report_type_changed(self.report_type_combo.currentIndex())
         layout.addStretch()
+    def on_report_type_changed(self, index):
+        is_detailed = (index == 0)
+        self.thumb_mode_label.setVisible(is_detailed)
+        self.thumb_mode_combo.setVisible(is_detailed)
     def _setup_naming_tab(self):
         main_layout = QVBoxLayout(self.naming_tab)
         token_group = QGroupBox("User-defined Tokens")
@@ -497,13 +635,17 @@ class SettingsDialog(QDialog):
         return {"project_name": self.project_name_input.text(), "camera_id": self.camera_id_input.text(), "template": self.template_input.text()}
     def get_settings(self):
         self.global_settings["concurrent_jobs"] = self.concurrent_jobs_spinbox.value()
-        self.global_settings["verification_mode"] = self.verification_mode_combo.currentData()
+        verify_map = {0: "full", 1: "size", 2: "none"}
+        self.global_settings["verification_mode"] = verify_map.get(self.verification_mode_combo.currentIndex())
         self.global_settings["defer_post_process"] = self.defer_post_process_checkbox.isChecked()
         self.global_settings["production_title"] = self.prod_title_input.text()
         self.global_settings["dit_name"] = self.dit_name_input.text()
-        self.global_settings["pdf_thumbnail_mode"] = self.thumb_mode_combo.currentData()
-        self.global_settings["pdf_detail_level"] = self.detail_level_combo.currentData()
+        report_map = {0: "detailed", 1: "contact_sheet"}
+        self.global_settings["pdf_report_type"] = report_map.get(self.report_type_combo.currentIndex())
+        thumb_map = {0: "single", 1: "filmstrip", 2: "none"}
+        self.global_settings["pdf_thumbnail_mode"] = thumb_map.get(self.thumb_mode_combo.currentIndex())
         return {"global": self.global_settings, "naming_preset": self._get_naming_data()}
+
 class MetadataDialog(QDialog):
     def __init__(self, existing_data=None, parent=None):
         super().__init__(parent)
@@ -518,7 +660,7 @@ class MetadataDialog(QDialog):
             self.camera_input.setText(existing_data.get("camera", ""))
             self.lens_input.setText(existing_data.get("lens", ""))
             self.notes_input.setPlainText(existing_data.get("notes", ""))
-        button_box = QPushButton("Save Metadata"); button_box.clicked.connect(self.accept)
+        button_box = QPushButton("Save Metadata"); button_box.setObjectName("PrimaryButton"); button_box.clicked.connect(self.accept)
         layout.addRow(button_box)
     def get_data(self):
         return {"camera": self.camera_input.text(), "lens": self.lens_input.text(), "notes": self.notes_input.toPlainText()}

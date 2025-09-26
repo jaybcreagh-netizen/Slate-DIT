@@ -1,0 +1,173 @@
+/* Global Settings */
+* {
+    font-family: ".AppleSystemUIFont", "Segoe UI", "Roboto", "Helvetica Neue", sans-serif;
+    color: #f0f0f0;
+    font-size: 13px;
+}
+
+QMainWindow { 
+    background-color: #1e1e1e; 
+}
+
+/* --- START NEW --- */
+/* --- ToggleSwitch Styling --- */
+/* This section uses qproperty to set custom properties on the ToggleSwitch widget */
+ToggleSwitch {
+    qproperty-inactive_color: #3e3e42;
+    qproperty-active_color: #007aff;
+    qproperty-disabled_color: #555;
+    qproperty-knob_color: #f0f0f0;
+    qproperty-disabled_knob_color: #999;
+    qproperty-track_indent_color: #303032;
+}
+/* --- END NEW --- */
+
+/* Frames and Layouts */
+QFrame#MainFrame { 
+    background-color: transparent; 
+    border: none; 
+}
+QFrame#DropFrame { 
+    background-color: #2c2c2e; 
+    border: 1.5px dashed #444; 
+    border-radius: 8px; 
+}
+QSplitter::handle { 
+    background-color: #3a3a3c; 
+    height: 1px; 
+}
+QSplitter::handle:hover { 
+    background-color: #4a4a4c; 
+}
+QSplitter::handle:pressed { 
+    background-color: #007aff; 
+}
+
+/* Labels */
+QLabel#TitleLabel { 
+    font-size: 15px; 
+    font-weight: bold; 
+    padding: 4px 0; 
+    background-color: transparent; 
+    border: none;
+}
+
+/* List Widgets (Source/Dest/Queue) */
+QListWidget { 
+    background-color: transparent; 
+    border: none; 
+}
+QListWidget::item { 
+    border-bottom: 1px solid #3a3a3c; 
+}
+QListWidget::item:hover { 
+    background-color: #38383a; 
+    border-radius: 5px; 
+}
+QListWidget::item:selected { 
+    background-color: #404043; 
+    border-radius: 5px; 
+    border-bottom: 1px solid transparent; 
+}
+
+/* Button Styling */
+QPushButton#PrimaryButton { 
+    background-color: #007aff; 
+    color: white; 
+    border: none; 
+    padding: 8px 14px; 
+    border-radius: 6px; 
+    font-weight: 600; 
+}
+QPushButton#PrimaryButton:hover { 
+    background-color: #1085e0; 
+}
+QPushButton#PrimaryButton:disabled { 
+    background-color: #3e3e42; 
+    color: #777; 
+}
+QPushButton#ToolbarButton { 
+    background-color: #3e3e42; 
+    color: white; 
+    border: none; 
+    padding: 8px 14px; 
+    border-radius: 6px; 
+    font-weight: 600; 
+}
+QPushButton#ToolbarButton:hover { 
+    background-color: #4e4e50; 
+}
+QPushButton#ToolbarButton:disabled { 
+    background-color: #303030; 
+    color: #666; 
+}
+
+/* Dropdown & Menu Styling */
+QPushButton#ModernDropdown { 
+    background-color: #3e3e42; 
+    border: 1px solid #555; 
+    border-radius: 5px; 
+    padding: 6px 10px; 
+    text-align: left; 
+}
+QPushButton#ModernDropdown:hover { 
+    background-color: #4e4e50; 
+}
+QMenu#ModernDropdownMenu { 
+    background-color: #2c2c2e; 
+    color: white; 
+    border: 1px solid #555; 
+    border-radius: 6px; 
+    padding: 4px; 
+}
+QMenu#ModernDropdownMenu::item { 
+    padding: 6px 24px; 
+    border-radius: 4px; 
+}
+QMenu#ModernDropdownMenu::item:selected { 
+    background-color: #007aff; 
+}
+QMenu { 
+    background-color: #2c2c2e; 
+    color: white; 
+    border: 1px solid #555;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 24px;
+    border-radius: 4px;
+}
+QMenu::item:selected { 
+    background-color: #007aff; 
+}
+QMenu::separator { 
+    height: 1px; 
+    background: #3a3a3c; 
+    margin: 4px 0px; 
+}
+QMenuBar { 
+    background-color: #1e1e1e; 
+}
+QMenuBar::item { 
+    padding: 4px 10px; 
+}
+QMenuBar::item:selected { 
+    background-color: #3e3e42; 
+    border-radius: 4px; 
+}
+
+/* Progress Bar */
+QProgressBar { 
+    text-align: center; 
+    border-radius: 5px; 
+    border: 1px solid #444; 
+    color: white; 
+}
+QProgressBar::chunk { 
+    background-color: #007aff; 
+    border-radius: 4px; 
+}
+QProgressBar[complete="true"]::chunk { 
+    background-color: #4CAF50; 
+}
