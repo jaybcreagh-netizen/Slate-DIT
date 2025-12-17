@@ -16,14 +16,14 @@ from PySide6.QtWidgets import (
     QComboBox, QProgressBar, QMessageBox, QMenu, QInputDialog,
     QFileDialog, QTextEdit, QStatusBar, QToolBar, QSizePolicy, QSplitter
 )
-from PySide6.QtCore import QTimer, QPoint, QUrl, Qt, QSize, QFile
-from PySide6.QtGui import QIcon, QFont, QAction, QKeyEvent
+from PySide6.QtCore import QTimer, QPoint, QUrl, Qt, QFile
+from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 import resources_rc
 
 from config import APP_NAME, PROJECTS_BASE_DIR
-from utils import get_icon, resolve_path_template, format_bytes, format_eta
+from utils import get_icon, format_eta
 from ui_components import (
     ProjectManagerDialog, SettingsDialog, MetadataDialog, DropFrame, MHLVerifyDialog, JobListItem, ToggleSwitch
 )
@@ -65,7 +65,8 @@ def _load_fonts():
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(APP_NAME); self.setGeometry(100, 100, 1200, 800)
+        self.setWindowTitle(APP_NAME)
+        self.setGeometry(100, 100, 1200, 800)
         
         _load_fonts()
 
@@ -97,7 +98,8 @@ class MainWindow(QMainWindow):
         self.audio_output.setVolume(0.8)
 
     def _setup_ui(self):
-        if sys.platform == "darwin": self.setUnifiedTitleAndToolBarOnMac(True)
+        if sys.platform == "darwin":
+            self.setUnifiedTitleAndToolBarOnMac(True)
         
         try:
             with open("style.qss", "r") as f:
@@ -153,17 +155,24 @@ class MainWindow(QMainWindow):
         self.checksum_combo.addItems(["xxHash (Fast)", "MD5 (Compatible)"])
         options_grid_layout.addWidget(self.checksum_combo)
         options_grid_layout.addStretch(1)
-        self.create_source_folder_checkbox = ToggleSwitch(); self.create_source_folder_checkbox.setChecked(True)
-        options_grid_layout.addWidget(self.create_source_folder_checkbox); options_grid_layout.addWidget(QLabel("Create source folder"))
+        self.create_source_folder_checkbox = ToggleSwitch()
+        self.create_source_folder_checkbox.setChecked(True)
+        options_grid_layout.addWidget(self.create_source_folder_checkbox)
+        options_grid_layout.addWidget(QLabel("Create source folder"))
         options_grid_layout.addSpacing(10)
         self.eject_checkbox = ToggleSwitch()
-        options_grid_layout.addWidget(self.eject_checkbox); options_grid_layout.addWidget(QLabel("Eject on completion"))
+        options_grid_layout.addWidget(self.eject_checkbox)
+        options_grid_layout.addWidget(QLabel("Eject on completion"))
         options_grid_layout.addSpacing(10)
-        self.skip_existing_checkbox = ToggleSwitch(); self.skip_existing_checkbox.setChecked(True)
-        options_grid_layout.addWidget(self.skip_existing_checkbox); options_grid_layout.addWidget(QLabel("Skip existing"))
+        self.skip_existing_checkbox = ToggleSwitch()
+        self.skip_existing_checkbox.setChecked(True)
+        options_grid_layout.addWidget(self.skip_existing_checkbox)
+        options_grid_layout.addWidget(QLabel("Skip existing"))
         options_grid_layout.addSpacing(10)
-        self.resume_checkbox = ToggleSwitch(); self.resume_checkbox.setChecked(True)
-        options_grid_layout.addWidget(self.resume_checkbox); options_grid_layout.addWidget(QLabel("Resume partial"))
+        self.resume_checkbox = ToggleSwitch()
+        self.resume_checkbox.setChecked(True)
+        options_grid_layout.addWidget(self.resume_checkbox)
+        options_grid_layout.addWidget(QLabel("Resume partial"))
         options_main_layout.addLayout(options_grid_layout)
 
         bottom_layout.addWidget(options_frame)
@@ -188,12 +197,14 @@ class MainWindow(QMainWindow):
         
         splitter.setSizes([self.height() * 0.35, self.height() * 0.65])
 
-        self.setStatusBar(QStatusBar(self)); self.statusBar().hide()
+        self.setStatusBar(QStatusBar(self))
+        self.statusBar().hide()
         self.source_frame.path_list.eject_requested.connect(self.on_eject_requested)
         self.dest_frame.path_list.eject_requested.connect(self.on_eject_requested)
 
     def _setup_toolbar(self):
-        self.toolbar = QToolBar("Main Toolbar"); self.toolbar.setMovable(False)
+        self.toolbar = QToolBar("Main Toolbar")
+        self.toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
 
         self.add_to_queue_button = QPushButton(get_icon("plus", "fa5s.plus", color="white"), " Add Job")
@@ -201,24 +212,36 @@ class MainWindow(QMainWindow):
         self.start_queue_button = QPushButton(get_icon("play.fill", "fa5s.play", color="white"), " Start Queue")
         self.start_queue_button.setObjectName("PrimaryButton")
         self.cancel_button = QPushButton(get_icon("stop.fill", "fa5s.stop", color="white"), " Cancel")
-        self.toolbar.addWidget(self.add_to_queue_button); self.toolbar.addWidget(self.start_queue_button); self.toolbar.addWidget(self.cancel_button)
+        self.toolbar.addWidget(self.add_to_queue_button)
+        self.toolbar.addWidget(self.start_queue_button)
+        self.toolbar.addWidget(self.cancel_button)
         
-        spacer = QWidget(); spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding); self.toolbar.addWidget(spacer)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.toolbar.addWidget(spacer)
 
         progress_widget = QWidget()
-        progress_layout = QVBoxLayout(progress_widget); progress_layout.setContentsMargins(0,0,0,0); progress_layout.setSpacing(2)
+        progress_layout = QVBoxLayout(progress_widget)
+        progress_layout.setContentsMargins(0,0,0,0)
+        progress_layout.setSpacing(2)
         
-        self.file_progress_label = QLabel("Idle"); 
-        font = self.file_progress_label.font(); font.setPointSize(font.pointSize() - 2); self.file_progress_label.setFont(font)
+        self.file_progress_label = QLabel("Idle") 
+        font = self.file_progress_label.font()
+        font.setPointSize(font.pointSize() - 2)
+        self.file_progress_label.setFont(font)
         self.file_progress_label.setAlignment(Qt.AlignCenter)
         
-        self.overall_progress_bar = QProgressBar(); self.overall_progress_bar.setTextVisible(True); self.overall_progress_bar.setMinimumWidth(350)
+        self.overall_progress_bar = QProgressBar()
+        self.overall_progress_bar.setTextVisible(True)
+        self.overall_progress_bar.setMinimumWidth(350)
         
-        progress_layout.addWidget(self.file_progress_label);
+        progress_layout.addWidget(self.file_progress_label)
         progress_layout.addWidget(self.overall_progress_bar)
         self.toolbar.addWidget(progress_widget)
         
-        spacer2 = QWidget(); spacer2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding); self.toolbar.addWidget(spacer2)
+        spacer2 = QWidget()
+        spacer2.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.toolbar.addWidget(spacer2)
         
         self.queue_title_label = QLabel("<b>Job Queue</b>")
         self.toolbar.addWidget(self.queue_title_label)
@@ -247,10 +270,17 @@ class MainWindow(QMainWindow):
     def _setup_menu(self):
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&File")
-        new_proj_action = QAction("New Project...", self); new_proj_action.triggered.connect(self.new_project); file_menu.addAction(new_proj_action)
-        open_proj_action = QAction("Open Project...", self); open_proj_action.triggered.connect(self.open_project); file_menu.addAction(open_proj_action)
-        self.recent_menu = QMenu("Open Recent", self); file_menu.addMenu(self.recent_menu)
-        close_proj_action = QAction("Close Project", self); close_proj_action.triggered.connect(self.show_project_manager); file_menu.addAction(close_proj_action)
+        new_proj_action = QAction("New Project...", self)
+        new_proj_action.triggered.connect(self.new_project)
+        file_menu.addAction(new_proj_action)
+        open_proj_action = QAction("Open Project...", self)
+        open_proj_action.triggered.connect(self.open_project)
+        file_menu.addAction(open_proj_action)
+        self.recent_menu = QMenu("Open Recent", self)
+        file_menu.addMenu(self.recent_menu)
+        close_proj_action = QAction("Close Project", self)
+        close_proj_action.triggered.connect(self.show_project_manager)
+        file_menu.addAction(close_proj_action)
         file_menu.addSeparator()
         self.load_template_action = QAction("Load Job Template...", self)
         self.load_template_action.triggered.connect(self.load_job_template)
@@ -259,14 +289,19 @@ class MainWindow(QMainWindow):
         self.save_template_action.triggered.connect(self.save_job_template)
         file_menu.addAction(self.save_template_action)
         file_menu.addSeparator()
-        settings_action = QAction("Settings...", self); settings_action.triggered.connect(self.show_settings_dialog); file_menu.addAction(settings_action)
+        settings_action = QAction("Settings...", self)
+        settings_action.triggered.connect(self.show_settings_dialog)
+        file_menu.addAction(settings_action)
         file_menu.addSeparator()
-        exit_action = QAction("Exit", self); exit_action.triggered.connect(self.close); file_menu.addAction(exit_action)
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
         self.load_template_action.setEnabled(False)
         self.save_template_action.setEnabled(False)
 
     def _setup_drive_monitor(self):
-        self.drive_monitor_timer = QTimer(self); self.drive_monitor_timer.setInterval(3000)
+        self.drive_monitor_timer = QTimer(self)
+        self.drive_monitor_timer.setInterval(3000)
         self.drive_monitor_timer.timeout.connect(self.check_drives)
     
     def _connect_manager_signals(self):
@@ -291,11 +326,14 @@ class MainWindow(QMainWindow):
         self.start_queue_button.setEnabled(bool(job_queue) or is_running)
         if is_running:
             if self.job_manager.is_paused:
-                self.start_queue_button.setText(" Resume"); self.start_queue_button.setIcon(get_icon("play.fill", "fa5s.play", color="white"))
+                self.start_queue_button.setText(" Resume")
+                self.start_queue_button.setIcon(get_icon("play.fill", "fa5s.play", color="white"))
             else:
-                self.start_queue_button.setText(" Pause"); self.start_queue_button.setIcon(get_icon("pause.fill", "fa5s.pause", color="white"))
+                self.start_queue_button.setText(" Pause")
+                self.start_queue_button.setIcon(get_icon("pause.fill", "fa5s.pause", color="white"))
         else:
-            self.start_queue_button.setText(" Start Queue"); self.start_queue_button.setIcon(get_icon("play.fill", "fa5s.play", color="white"))
+            self.start_queue_button.setText(" Start Queue")
+            self.start_queue_button.setIcon(get_icon("play.fill", "fa5s.play", color="white"))
             self.update_overall_progress(0, "Queue Idle", 0.0, -1)
             self.file_progress_label.setText("Idle")
 
@@ -326,27 +364,36 @@ class MainWindow(QMainWindow):
                 self.file_progress_label.setText("Waiting...")
 
     def play_sound(self, sound_type):
-        if sound_type == "success": self.player.setSource(QUrl("qrc:/sounds/success.mp3"))
-        elif sound_type == "error": self.player.setSource(QUrl("qrc:/sounds/error.mp3"))
-        if self.player.source().isValid(): self.player.play()
+        if sound_type == "success":
+            self.player.setSource(QUrl("qrc:/sounds/success.mp3"))
+        elif sound_type == "error":
+            self.player.setSource(QUrl("qrc:/sounds/error.mp3"))
+        if self.player.source().isValid():
+            self.player.play()
     
     def on_eject_requested(self, path):
-        if self.eject_worker and self.eject_worker.isRunning(): return
+        if self.eject_worker and self.eject_worker.isRunning():
+            return
         self.eject_worker = EjectWorker(path)
         self.eject_worker.ejection_finished.connect(self.on_ejection_finished)
         self.eject_worker.start()
 
     def on_ejection_finished(self, path, success):
-        if success: QMessageBox.information(self, "Ejection Succeeded", f"Successfully ejected '{os.path.basename(path)}'.")
-        else: QMessageBox.warning(self, "Ejection Failed", f"Failed to eject '{os.path.basename(path)}'. It may be in use by another application.")
+        if success:
+            QMessageBox.information(self, "Ejection Succeeded", f"Successfully ejected '{os.path.basename(path)}'.")
+        else:
+            QMessageBox.warning(self, "Ejection Failed", f"Failed to eject '{os.path.basename(path)}'. It may be in use by another application.")
         self.eject_worker = None
 
     def keyPressEvent(self, event: QKeyEvent):
-        if self.job_manager.is_running: return
+        if self.job_manager.is_running:
+            return
         if event.key() == Qt.Key_Backspace or event.key() == Qt.Key_Delete:
             focused_list = None
-            if self.source_frame.path_list.hasFocus(): focused_list = self.source_frame.path_list
-            elif self.dest_frame.path_list.hasFocus(): focused_list = self.dest_frame.path_list
+            if self.source_frame.path_list.hasFocus():
+                focused_list = self.source_frame.path_list
+            elif self.dest_frame.path_list.hasFocus():
+                focused_list = self.dest_frame.path_list
             elif self.job_list.hasFocus():
                 selected_items = self.job_list.selectedItems()
                 if selected_items:
@@ -356,11 +403,13 @@ class MainWindow(QMainWindow):
                 return
             if focused_list and focused_list.currentItem():
                 widget = focused_list.itemWidget(focused_list.currentItem())
-                if widget: focused_list.remove_path(widget.path)
+                if widget:
+                    focused_list.remove_path(widget.path)
 
     def _set_controls_enabled(self, enabled):
         is_project_loaded = self.project_path is not None
-        self.source_frame.setEnabled(enabled); self.dest_frame.setEnabled(enabled)
+        self.source_frame.setEnabled(enabled)
+        self.dest_frame.setEnabled(enabled)
         self.checksum_combo.setEnabled(enabled)
         self.add_to_queue_button.setEnabled(enabled)
         self.start_queue_button.setEnabled(enabled and (bool(self.job_manager.job_queue) or bool(self.job_manager.active_workers)))
@@ -389,20 +438,26 @@ class MainWindow(QMainWindow):
     def update_folder_creation_mode(self):
         has_template = bool(self.naming_preset.get("template"))
         self.create_source_folder_checkbox.setEnabled(not has_template)
-        if has_template: self.create_source_folder_checkbox.setChecked(False)
+        if has_template:
+            self.create_source_folder_checkbox.setChecked(False)
 
     def show_metadata_dialog(self, path):
         dialog = MetadataDialog(self.source_metadata.get(path), self)
-        if dialog.exec(): self.source_metadata[path] = dialog.get_data()
+        if dialog.exec():
+            self.source_metadata[path] = dialog.get_data()
         
     def check_drives(self):
-        try: current_drives = set(p.mountpoint for p in psutil.disk_partitions())
-        except Exception as e: print(f"Error getting disk partitions: {e}"); return
+        try:
+            current_drives = set(p.mountpoint for p in psutil.disk_partitions())
+        except Exception as e:
+            print(f"Error getting disk partitions: {e}")
+            return
         new_drives, removed_drives = current_drives - self.mounted_drives, self.mounted_drives - current_drives
         if new_drives:
             for drive in new_drives:
                 reply = QMessageBox.question(self, "New Drive Detected", f"New drive '{drive}' detected. Add it as a source?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
-                if reply == QMessageBox.Yes: self.source_frame.path_list.add_path(drive)
+                if reply == QMessageBox.Yes:
+                    self.source_frame.path_list.add_path(drive)
         if removed_drives:
             all_paths = self.source_frame.path_list.get_all_paths() + self.dest_frame.path_list.get_all_paths()
             for drive in removed_drives:
@@ -412,8 +467,9 @@ class MainWindow(QMainWindow):
                         self.dest_frame.path_list.remove_path(path)
         self.mounted_drives = current_drives
 
-    def new_project(self):
-        if self.project_path: self._save_project_state()
+            if self.project_path:
+
+                self._save_project_state()
         project_name, ok = QInputDialog.getText(self, "New Project", "Enter Project Name:")
         if ok and project_name:
             if any(char in project_name for char in '/\\:*?"<>|'):
@@ -432,18 +488,24 @@ class MainWindow(QMainWindow):
     def open_project(self):
         if self.project_path: self._save_project_state()
         path = QFileDialog.getExistingDirectory(self, "Select Project Folder", dir=PROJECTS_BASE_DIR)
-        if path and os.path.isdir(os.path.join(path, ".dit_project")): self._load_project(path)
-        elif path: QMessageBox.warning(self, "Invalid Project", "The selected folder is not a valid project.")
+        if path and os.path.isdir(os.path.join(path, ".dit_project")):
+            self._load_project(path)
+        elif path:
+            QMessageBox.warning(self, "Invalid Project", "The selected folder is not a valid project.")
     
     def _load_project(self, path):
         if self.project_path: self._save_project_state()
-        self.project_path = path; project_name = os.path.basename(path)
+        self.project_path = path
+        project_name = os.path.basename(path)
         self.setWindowTitle(f"{APP_NAME} - {project_name}")
         self.queue_title_label.setText(f"<b>Job Queue - {project_name}</b>")
-        self.job_manager.job_queue.clear(); self.job_manager.completed_jobs.clear(); self.job_manager.post_process_queue.clear()
+        self.job_manager.job_queue.clear()
+        self.job_manager.completed_jobs.clear()
+        self.job_manager.post_process_queue.clear()
         self.card_counter = 1
         self._load_project_state()
-        self._set_controls_enabled(True); self._add_to_recent_projects(path)
+        self._set_controls_enabled(True)
+        self._add_to_recent_projects(path)
         try:
             self.mounted_drives = {p.mountpoint for p in psutil.disk_partitions()}
             self.drive_monitor_timer.start()
@@ -452,25 +514,33 @@ class MainWindow(QMainWindow):
         self.show()
 
     def _save_project_state(self):
-        if not self.project_path: return
+        if not self.project_path:
+            return
         def dt_handler(o):
-            if isinstance(o, datetime): return o.isoformat()
+            if isinstance(o, datetime):
+                return o.isoformat()
         state = {"sources": self.source_frame.path_list.get_all_paths(), "destinations": self.dest_frame.path_list.get_all_paths(),
                  "checksum_method": self.checksum_combo.currentText(), "completed_jobs": self.job_manager.completed_jobs,
                  "source_metadata": self.source_metadata, "naming_preset": self.naming_preset, "card_counter": self.card_counter}
         state_path = os.path.join(self.project_path, ".dit_project", "project_state.json")
         try:
             with open(state_path, 'w') as f: json.dump(state, f, indent=2, default=dt_handler)
-        except Exception as e: print(f"Error saving project state: {e}")
+        except Exception as e:
+            print(f"Error saving project state: {e}")
 
     def _load_project_state(self):
         state_path = os.path.join(self.project_path, ".dit_project", "project_state.json")
-        self.source_frame.path_list.clear(); self.dest_frame.path_list.clear(); self.job_list.clear()
+        self.source_frame.path_list.clear()
+        self.dest_frame.path_list.clear()
+        self.job_list.clear()
         if os.path.exists(state_path):
             try:
-                with open(state_path, 'r') as f: state = json.load(f)
-                for path in state.get("sources", []): self.source_frame.path_list.add_path(path)
-                for path in state.get("destinations", []): self.dest_frame.path_list.add_path(path)
+                with open(state_path, 'r') as f:
+                    state = json.load(f)
+                for path in state.get("sources", []):
+                    self.source_frame.path_list.add_path(path)
+                for path in state.get("destinations", []):
+                    self.dest_frame.path_list.add_path(path)
                 self.checksum_combo.setCurrentText(state.get("checksum_method", "xxHash (Fast)"))
                 self.source_metadata = state.get("source_metadata", {})
                 self.naming_preset = state.get("naming_preset", {})
@@ -483,8 +553,10 @@ class MainWindow(QMainWindow):
                         if 'end_time' in job['report'] and isinstance(job['report']['end_time'], str):
                              job['report']['end_time'] = datetime.fromisoformat(job['report']['end_time'])
                 self.job_manager.completed_jobs = loaded_jobs
-            except Exception as e: print(f"Error loading project state: {e}")
-        self.update_job_list(); self.update_folder_creation_mode()
+            except Exception as e:
+                print(f"Error loading project state: {e}")
+        self.update_job_list()
+        self.update_folder_creation_mode()
 
     def update_job_list(self):
         current_job_ids = {job['id'] for job in self.job_manager.get_all_jobs()}
@@ -494,7 +566,8 @@ class MainWindow(QMainWindow):
                 items_to_remove.append(job_id)
             else:
                 job_data = next((j for j in self.job_manager.get_all_jobs() if j['id'] == job_id), None)
-                if job_data: self.job_item_map[job_id].update_status(job_data)
+                if job_data:
+                    self.job_item_map[job_id].update_status(job_data)
         for job_id in items_to_remove:
             for i in range(self.job_list.count()):
                 item = self.job_list.item(i)
@@ -511,17 +584,22 @@ class MainWindow(QMainWindow):
                 self.job_list.addItem(item)
                 self.job_list.setItemWidget(item, job_widget)
                 self.job_item_map[job['id']] = job_widget
-        self.job_list.setContextMenuPolicy(Qt.CustomContextMenu); self.job_list.customContextMenuRequested.connect(self.show_job_context_menu)
+        self.job_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.job_list.customContextMenuRequested.connect(self.show_job_context_menu)
         self._update_report_buttons_state() # Update state whenever job list changes
         
     def show_job_context_menu(self, pos: QPoint):
         item = self.job_list.itemAt(pos)
-        if not item: return
+        if not item:
+            return
         widget = self.job_list.itemWidget(item)
-        if not widget: return
+        if not widget:
+            return
         job_data = next((j for j in self.job_manager.get_all_jobs() if j['id'] == widget.job_id), None)
-        if not job_data: return
-        menu = QMenu(self); menu.setAttribute(Qt.WA_DeleteOnClose)
+        if not job_data:
+            return
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
         if job_data in self.job_manager.completed_jobs and 'report' in job_data:
             reports_submenu = QMenu("Save Report", self)
             reports_submenu.addAction("Transfer Report (PDF)...", lambda: self.report_manager.save_pdf_report(job_data['report']))
@@ -541,23 +619,33 @@ class MainWindow(QMainWindow):
         source_names = "\n".join([f"- {os.path.basename(p)}" for p in sources])
         reply = QMessageBox.question(self, "Eject Sources?", f"The following sources were verified successfully and can be ejected. Eject them now?\n\n{source_names}", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if reply == QMessageBox.Yes:
-            for path in sources: self.on_eject_requested(path)
+            for path in sources:
+                self.on_eject_requested(path)
 
     def show_mhl_verify_report(self, report_data):
-        msg_box = QMessageBox(self); msg_box.setWindowTitle("MHL Verification Issues"); msg_box.setIcon(QMessageBox.Warning)
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("MHL Verification Issues")
+        msg_box.setIcon(QMessageBox.Warning)
         summary = (f"Verification completed with {report_data['failed_count']} failed checksum(s) " f"and {report_data['missing_count']} missing file(s).")
         details = ""
         failed_files = [f for f in report_data['files'] if f['status'] == 'FAILED']
         missing_files = [f for f in report_data['files'] if f['status'] == 'Missing']
         if failed_files:
             details += "<b>Failed Checksums:</b>\n"
-            for f in failed_files: details += f"• {os.path.basename(f['path'])}\n"
+            for f in failed_files:
+                details += f"• {os.path.basename(f['path'])}\n"
         if missing_files:
             details += "\n<b>Missing Files:</b>\n"
-            for f in missing_files: details += f"• {os.path.basename(f['path'])}\n"
-        msg_box.setText(summary); msg_box.setInformativeText("See details below. A full PDF report can also be saved.")
-        text_edit = QTextEdit(); text_edit.setHtml(details); text_edit.setReadOnly(True); text_edit.setMinimumHeight(150)
-        grid_layout = msg_box.layout(); grid_layout.addWidget(text_edit, grid_layout.rowCount(), 0, 1, grid_layout.columnCount())
+            for f in missing_files:
+                details += f"• {os.path.basename(f['path'])}\n"
+        msg_box.setText(summary)
+        msg_box.setInformativeText("See details below. A full PDF report can also be saved.")
+        text_edit = QTextEdit()
+        text_edit.setHtml(details)
+        text_edit.setReadOnly(True)
+        text_edit.setMinimumHeight(150)
+        grid_layout = msg_box.layout()
+        grid_layout.addWidget(text_edit, grid_layout.rowCount(), 0, 1, grid_layout.columnCount())
         msg_box.exec()
 
     def save_session_report(self):
@@ -591,24 +679,30 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         settings = {"global": self.global_settings, "recent_projects": getattr(self, "recent_projects", [])}
         os.makedirs(PROJECTS_BASE_DIR, exist_ok=True)
-        with open(self.get_settings_path(), "w") as f: json.dump(settings, f, indent=2)
+        with open(self.get_settings_path(), "w") as f:
+            json.dump(settings, f, indent=2)
         
     def load_settings(self):
         settings_path = self.get_settings_path()
         if os.path.exists(settings_path):
             try:
-                with open(settings_path, "r") as f: settings = json.load(f)
+                with open(settings_path, "r") as f:
+                    settings = json.load(f)
                 self.global_settings = settings.get("global", {})
                 self.job_manager.set_max_concurrent_jobs(self.global_settings.get("concurrent_jobs", 1))
                 self.recent_projects = settings.get("recent_projects", [])
                 self._populate_recent_menu()
                 
                 last_project = self.global_settings.get("last_project")
-                if last_project and os.path.exists(last_project): self._load_project(last_project)
-                else: self.show_project_manager()
+                if last_project and os.path.exists(last_project):
+                    self._load_project(last_project)
+                else:
+                    self.show_project_manager()
                     
-            except json.JSONDecodeError: self.show_project_manager()
-        else: self.show_project_manager()
+            except json.JSONDecodeError:
+                self.show_project_manager()
+        else:
+            self.show_project_manager()
 
     def show_settings_dialog(self):
         is_project_loaded = self.project_path is not None
@@ -635,32 +729,42 @@ class MainWindow(QMainWindow):
         dialog.project_selected.connect(self._load_project)
         dialog.new_project_requested.connect(self.new_project)
         if not dialog.exec():
-             if not self.project_path: sys.exit()
+             if not self.project_path:
+                sys.exit()
                 
     def _add_to_recent_projects(self, path):
-        if not hasattr(self, "recent_projects"): self.recent_projects = []
-        if path in self.recent_projects: self.recent_projects.remove(path)
-        self.recent_projects.insert(0, path); self.recent_projects = self.recent_projects[:5]
+        if not hasattr(self, "recent_projects"):
+            self.recent_projects = []
+        if path in self.recent_projects:
+            self.recent_projects.remove(path)
+        self.recent_projects.insert(0, path)
+        self.recent_projects = self.recent_projects[:5]
         self.global_settings["last_project"] = path
-        self._populate_recent_menu(); self.save_settings()
+        self._populate_recent_menu()
+        self.save_settings()
         
     def _populate_recent_menu(self):
         self.recent_menu.clear()
         if hasattr(self, "recent_projects") and self.recent_projects:
             for path in self.recent_projects:
-                action = QAction(os.path.basename(path), self); action.setData(path)
-                action.triggered.connect(self._open_recent_project); self.recent_menu.addAction(action)
+                action = QAction(os.path.basename(path), self)
+                action.setData(path)
+                action.triggered.connect(self._open_recent_project)
+                self.recent_menu.addAction(action)
         self.recent_menu.setEnabled(bool(self.recent_menu.actions()))
         
     def _open_recent_project(self):
-        if self.project_path: self._save_project_state()
+        if self.project_path:
+            self._save_project_state()
         action = self.sender()
         if action:
             path = action.data()
-            if os.path.exists(path): self._load_project(path)
+            if os.path.exists(path):
+                self._load_project(path)
             else:
                 QMessageBox.warning(self, "Project Not Found", "The project path could not be found.")
-                self.recent_projects.remove(path); self._populate_recent_menu()
+                self.recent_projects.remove(path)
+                self._populate_recent_menu()
 
     def show_mhl_verify_dialog(self):
         dialog = MHLVerifyDialog(self)
@@ -675,38 +779,28 @@ class MainWindow(QMainWindow):
     def save_job_template(self):
         default_name = f"{os.path.basename(self.project_path or 'Untitled')}_Template.dittemplate"
         file_path, _ = QFileDialog.getSaveFileName(self, "Save Job Template", default_name, "DIT Templates (*.dittemplate)")
-        if not file_path: return
+        if not file_path:
+            return
         template_data = { "destinations": self.dest_frame.path_list.get_all_paths(), "checksum_method": self.checksum_combo.currentText(), "create_source_folder": self.create_source_folder_checkbox.isChecked(), "eject_on_completion": self.eject_checkbox.isChecked(), "skip_existing": self.skip_existing_checkbox.isChecked(), "resume_partial": self.resume_checkbox.isChecked() }
         try:
-            with open(file_path, 'w') as f: json.dump(template_data, f, indent=2)
+            with open(file_path, 'w') as f:
+                json.dump(template_data, f, indent=2)
             QMessageBox.information(self, "Success", "Job template saved successfully.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not save template: {e}")
 
-    def load_job_template(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Load Job Template", "", "DIT Templates (*.dittemplate)")
-        if not file_path: return
-        try:
-            with open(file_path, 'r') as f: template_data = json.load(f)
-            self.source_frame.path_list.clear(); self.dest_frame.path_list.clear()
-            for path in template_data.get("destinations", []): self.dest_frame.path_list.add_path(path)
-            self.checksum_combo.setCurrentText(template_data.get("checksum_method", "xxHash (Fast)"))
-            self.create_source_folder_checkbox.setChecked(template_data.get("create_source_folder", True))
-            self.eject_checkbox.setChecked(template_data.get("eject_on_completion", False))
-            self.skip_existing_checkbox.setChecked(template_data.get("skip_existing", True))
-            self.resume_checkbox.setChecked(template_data.get("resume_partial", True))
-            QMessageBox.information(self, "Success", "Job template loaded. Please add your source drives.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Could not load template: {e}")
-
     def closeEvent(self, event):
-        if self.project_path: self._save_project_state()
+        if self.project_path:
+            self._save_project_state()
         if self.job_manager.is_running:
             reply = QMessageBox.question(self, "Exit Confirmation", "A transfer is in progress. Are you sure you want to exit?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
             if reply == QMessageBox.Yes:
-                self.job_manager.cancel_queue(); event.accept()
-            else: event.ignore()
-        else: event.accept()
+                self.job_manager.cancel_queue()
+                event.accept()
+            else:
+                event.ignore()
+        else:
+            event.accept()
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()

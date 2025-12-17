@@ -5,18 +5,16 @@ import sys
 import subprocess
 
 import psutil
-import qtawesome as qta
 from PySide6.QtCore import Qt, Signal, QSize, QPropertyAnimation, QEasingCurve, Property, QEvent, QParallelAnimationGroup, QPoint
-from PySide6.QtGui import QMouseEvent, QFont, QAction, QPainter, QColor, QBrush
+from PySide6.QtGui import QMouseEvent, QAction, QPainter, QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame,
     QListWidget, QListWidgetItem, QFileDialog, QDialog, QLineEdit,
     QMenu, QMessageBox, QTextEdit, QFormLayout, QGroupBox,
-    QInputDialog, QTabWidget, QComboBox, QProgressBar, QSpinBox, QCheckBox,
-    QGraphicsOpacityEffect, QSizePolicy
+    QTabWidget, QSpinBox, QGraphicsOpacityEffect, QSizePolicy
 )
 
-from utils import get_icon, get_icon_for_path, format_bytes, format_eta, resolve_path_template
+from utils import get_icon, get_icon_for_path, format_bytes, resolve_path_template
 
 class ToggleSwitch(QWidget):
     toggled = Signal(bool)

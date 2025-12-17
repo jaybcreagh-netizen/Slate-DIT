@@ -4,7 +4,6 @@ import platform
 import subprocess
 import sys
 from datetime import datetime
-import psutil
 import qtawesome as qta
 from PySide6.QtGui import QIcon
 

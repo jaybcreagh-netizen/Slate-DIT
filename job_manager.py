@@ -156,18 +156,21 @@ class JobManager(QObject):
         else:
             if self.is_paused:
                 self.is_paused = False
-                for worker in self.active_workers: worker.resume()
+                for worker in self.active_workers:
+                    worker.resume()
                 # Un-pause timers
                 self.queue_start_time += (time.monotonic() - self.pause_time)
                 self.last_progress_update_time += (time.monotonic() - self.pause_time)
             else:
                 self.is_paused = True
                 self.pause_time = time.monotonic()
-                for worker in self.active_workers: worker.pause()
+                for worker in self.active_workers:
+                    worker.pause()
             self.queue_state_changed.emit(self.is_running, self.job_queue)
 
     def cancel_queue(self):
-        if not self.is_running: return
+        if not self.is_running:
+            return
         reply = QMessageBox.question(self.window, "Cancel Queue", "Are you sure you want to cancel all running and queued jobs?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             for worker in self.active_workers[:]:
@@ -211,11 +214,13 @@ class JobManager(QObject):
 
     # --- START REFACTOR: Implement rolling average calculation ---
     def _on_worker_progress_updated(self, job_id, bytes_processed_in_job, speed_mbps, eta_seconds):
-        if job_id not in self.active_job_progress: return
+        if job_id not in self.active_job_progress:
+            return
         
         # Calculate how many new bytes were processed since the last update
         delta = bytes_processed_in_job - self.active_job_progress[job_id]
-        if delta <= 0: return # No change, no update needed
+        if delta <= 0:
+            return # No change, no update needed
 
         self.total_bytes_processed_in_queue += delta
         self.active_job_progress[job_id] = bytes_processed_in_job
@@ -263,7 +268,8 @@ class JobManager(QObject):
             if worker.job['id'] == job_id:
                 finished_worker_job = worker.job
                 break
-        if not finished_worker_job: return
+        if not finished_worker_job:
+            return
 
         # --- START REFACTOR: Remove flawed "true-up" logic ---
         # The worker's progress signals are now the single source of truth.
@@ -306,7 +312,8 @@ class JobManager(QObject):
             self._start_post_processing_if_needed()
 
     def _start_post_processing_if_needed(self):
-        if hasattr(self, 'post_process_worker') and self.post_process_worker.isRunning(): return
+        if hasattr(self, 'post_process_worker') and self.post_process_worker.isRunning():
+            return
         if not self.post_process_queue:
             self.post_process_status_updated.emit("")
             return

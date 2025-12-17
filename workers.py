@@ -20,11 +20,6 @@ import rawpy
 
 from config import FFMPEG_PATH, FFPROBE_PATH
 from utils import check_command, resolve_path_template
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, PageBreak, Table, TableStyle
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.pagesizes import letter
-from reportlab.lib import colors
-from utils import format_bytes, check_command, resolve_path_template 
 
 # --- ScanWorker, EjectWorker, PostProcessWorker are unchanged ---
 class ScanWorker(QThread):

@@ -271,7 +271,7 @@ class ReportManager:
         default_name = f"{os.path.basename(self.window.project_path)}_{report['job_id']}.mhl"
         file_path, _ = QFileDialog.getSaveFileName(self.window, "Save MHL Manifest", default_name, "MHL Files (*.mhl)")
         if not file_path: return
-        root = Element('hashlist', version='1.1'); creatorinfo = SubElement(root, 'creatorinfo');
+        root = Element('hashlist', version='1.1'); creatorinfo = SubElement(root, 'creatorinfo')
         SubElement(creatorinfo, 'hostname').text = platform.node(); SubElement(creatorinfo, 'username').text = os.getlogin()
         SubElement(creatorinfo, 'tool').text = f"{APP_NAME} {APP_VERSION}"; SubElement(creatorinfo, 'startdate').text = report['start_time'].isoformat()
         SubElement(creatorinfo, 'finishdate').text = report['end_time'].isoformat()
