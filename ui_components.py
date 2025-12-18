@@ -234,7 +234,8 @@ class JobListItem(QWidget):
         sfs_name, fa_name = icons.get(next((s for s in icons if s in status), "default"), ("exclamationmark.triangle.fill", "fa5s.exclamation-circle"))
         icon = get_icon(sfs_name, fa_name, color=icon_color)
         self.status_icon.setPixmap(icon.pixmap(QSize(18, 18)))
-        if sys.platform == "darwin": self.status_icon.setStyleSheet(f"color: {icon_color};")
+        if sys.platform == "darwin":
+            self.status_icon.setStyleSheet(f"color: {icon_color};")
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if hasattr(self, 'job_data'):
@@ -245,29 +246,46 @@ class PathListItem(QWidget):
     def __init__(self, path, parent=None):
         super().__init__(parent)
         self.path = path
-        layout = QHBoxLayout(self); layout.setContentsMargins(5, 5, 5, 5)
-        self.icon_label = QLabel(); self.icon_label.setPixmap(get_icon_for_path(path).pixmap(QSize(32, 32)))
-        text_layout = QVBoxLayout(); text_layout.setSpacing(1)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(5, 5, 5, 5)
+        self.icon_label = QLabel()
+        self.icon_label.setPixmap(get_icon_for_path(path).pixmap(QSize(32, 32)))
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(1)
         self.name_label = QLabel()
-        font_name = self.name_label.font(); font_name.setPointSize(font_name.pointSize() + 1); self.name_label.setFont(font_name)
+        font_name = self.name_label.font()
+        font_name.setPointSize(font_name.pointSize() + 1)
+        self.name_label.setFont(font_name)
         self.path_label = QLabel()
-        font_path = self.path_label.font(); font_path.setPointSize(font_path.pointSize() - 2); self.path_label.setFont(font_path)
+        font_path = self.path_label.font()
+        font_path.setPointSize(font_path.pointSize() - 2)
+        self.path_label.setFont(font_path)
         self.path_label.setStyleSheet("color: #999;")
         self.name_label.setText(f"<b>{os.path.basename(path) or path}</b>")
         self.path_label.setText(os.path.dirname(path))
-        text_layout.addWidget(self.name_label); text_layout.addWidget(self.path_label)
+        text_layout.addWidget(self.name_label)
+        text_layout.addWidget(self.path_label)
         if os.path.ismount(path):
             try:
                 usage = psutil.disk_usage(path)
                 space_info = f"{format_bytes(usage.free)} free of {format_bytes(usage.total)}"
                 self.space_label = QLabel(space_info)
-                font_space = self.space_label.font(); font_space.setPointSize(font_space.pointSize() - 3); self.space_label.setFont(font_space)
-                self.space_label.setStyleSheet("color: #888;"); text_layout.addWidget(self.space_label)
-            except Exception as e: print(f"Could not get disk usage for {path}: {e}")
+                font_space = self.space_label.font()
+                font_space.setPointSize(font_space.pointSize() - 3)
+                self.space_label.setFont(font_space)
+                self.space_label.setStyleSheet("color: #888;")
+                text_layout.addWidget(self.space_label)
+            except Exception as e:
+                print(f"Could not get disk usage for {path}: {e}")
         self.remove_button = QPushButton(get_icon("xmark.circle.fill", "fa5s.times", color="gray"), "")
-        self.remove_button.setFlat(True); self.remove_button.setFixedSize(24, 24); self.remove_button.setStyleSheet("background-color: transparent;")
+        self.remove_button.setFlat(True)
+        self.remove_button.setFixedSize(24, 24)
+        self.remove_button.setStyleSheet("background-color: transparent;")
         self.remove_button.clicked.connect(lambda: self.remove_clicked.emit(self.path))
-        layout.addWidget(self.icon_label); layout.addLayout(text_layout); layout.addStretch(); layout.addWidget(self.remove_button)
+        layout.addWidget(self.icon_label)
+        layout.addLayout(text_layout)
+        layout.addStretch()
+        layout.addWidget(self.remove_button)
     def resizeEvent(self, event):
         super().resizeEvent(event)
         fm_path = self.path_label.fontMetrics()
@@ -286,47 +304,60 @@ class PathListWidget(QListWidget):
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self.show_context_menu)
     def add_path(self, path):
-        if self.path_exists(path): return
+        if self.path_exists(path):
+            return
         item = QListWidgetItem(self)
         widget = PathListItem(path)
-        widget.remove_clicked.connect(self.remove_path)
-        item.setSizeHint(widget.sizeHint())
-        self.addItem(item); self.setItemWidget(item, widget)
+        self.addItem(item)
+        self.setItemWidget(item, widget)
     def remove_path(self, path_to_remove):
         for i in range(self.count()):
-            item = self.item(i); widget = self.itemWidget(item)
+            item = self.item(i)
+            widget = self.itemWidget(item)
             if widget and widget.path == path_to_remove:
-                self.takeItem(i); break
+                self.takeItem(i)
+                break
     def path_exists(self, path_to_check): return path_to_check in self.get_all_paths()
     def get_all_paths(self): return [self.itemWidget(self.item(i)).path for i in range(self.count()) if self.itemWidget(self.item(i))]
     def show_context_menu(self, pos):
         item = self.itemAt(pos)
-        if not item: return
+        if not item:
+            return
         widget = self.itemWidget(item)
-        if not widget: return
+        if not widget:
+            return
         path = widget.path
         main_window = self.window()
         is_transfer_running = main_window.job_manager.is_running if main_window else False
-        menu = QMenu(self); menu.setAttribute(Qt.WA_DeleteOnClose)
+        menu = QMenu(self)
+        menu.setAttribute(Qt.WA_DeleteOnClose)
         if os.path.ismount(path):
             eject_action = QAction(get_icon("eject.fill", "fa5s.eject", color="white"), "Eject Drive", self)
             eject_action.triggered.connect(lambda: self.eject_requested.emit(path))
             eject_action.setEnabled(not is_transfer_running)
-            if is_transfer_running: eject_action.setToolTip("Cannot eject while a transfer is in progress.")
-            menu.addAction(eject_action); menu.addSeparator()
+            if is_transfer_running:
+                eject_action.setToolTip("Cannot eject while a transfer is in progress.")
+            menu.addAction(eject_action)
+            menu.addSeparator()
         open_action_text = "Open in Explorer" if platform.system() == "Windows" else "Open in Finder"
-        open_action = QAction(open_action_text, self); open_action.triggered.connect(lambda: self.open_in_explorer(path))
+        open_action = QAction(open_action_text, self)
+        open_action.triggered.connect(lambda: self.open_in_explorer(path))
         menu.addAction(open_action)
-        metadata_action = QAction("Add/Edit Metadata...", self); metadata_action.triggered.connect(lambda: self.metadata_requested.emit(path))
+        metadata_action = QAction("Add/Edit Metadata...", self)
+        metadata_action.triggered.connect(lambda: self.metadata_requested.emit(path))
         menu.addAction(metadata_action)
-        remove_action = QAction("Remove From List", self); remove_action.triggered.connect(lambda: self.remove_path(path))
+        remove_action = QAction("Remove From List", self)
+        remove_action.triggered.connect(lambda: self.remove_path(path))
         menu.addAction(remove_action)
         menu.exec(self.mapToGlobal(pos))
     def open_in_explorer(self, path):
         try:
-            if platform.system() == "Windows": os.startfile(path)
-            elif platform.system() == "Darwin": subprocess.run(["open", path])
-            else: subprocess.run(["xdg-open", path])
+            if platform.system() == "Windows":
+                os.startfile(path)
+            elif platform.system() == "Darwin":
+                subprocess.run(["open", path])
+            else:
+                subprocess.run(["xdg-open", path])
         except Exception as e:
             print(f"Error opening path {path}: {e}")
 
@@ -340,27 +371,40 @@ class AnimatedPathListWidget(PathListWidget):
         widget = PathListItem(path)
         widget.remove_clicked.connect(self.remove_path_animated)
         item.setSizeHint(widget.sizeHint())
-        self.addItem(item); self.setItemWidget(item, widget)
-        effect = QGraphicsOpacityEffect(widget); widget.setGraphicsEffect(effect)
-        self.anim_in = QPropertyAnimation(effect, b"opacity"); self.anim_in.setDuration(300)
-        self.anim_in.setStartValue(0.0); self.anim_in.setEndValue(1.0)
-        self.anim_in.setEasingCurve(QEasingCurve.InOutQuad); self.anim_in.start(QPropertyAnimation.DeleteWhenStopped)
+        self.addItem(item)
+        self.setItemWidget(item, widget)
+        effect = QGraphicsOpacityEffect(widget)
+        widget.setGraphicsEffect(effect)
+        self.anim_in = QPropertyAnimation(effect, b"opacity")
+        self.anim_in.setDuration(300)
+        self.anim_in.setStartValue(0.0)
+        self.anim_in.setEndValue(1.0)
+        self.anim_in.setEasingCurve(QEasingCurve.InOutQuad)
+        self.anim_in.start(QPropertyAnimation.DeleteWhenStopped)
     def remove_path(self, path_to_remove):
         for i in range(self.count()):
-            item = self.item(i); widget = self.itemWidget(item)
+            item = self.item(i)
+            widget = self.itemWidget(item)
             if widget and widget.path == path_to_remove:
-                self.takeItem(i); break
+                self.takeItem(i)
+                break
     def remove_path_animated(self, path_to_remove):
         for i in range(self.count()):
-            item = self.item(i); widget = self.itemWidget(item)
+            item = self.item(i)
+            widget = self.itemWidget(item)
             if widget and widget.path == path_to_remove:
                 effect = widget.graphicsEffect()
-                if not effect: effect = QGraphicsOpacityEffect(widget); widget.setGraphicsEffect(effect)
-                self.anim_out = QPropertyAnimation(effect, b"opacity"); self.anim_out.setDuration(250)
-                self.anim_out.setStartValue(1.0); self.anim_out.setEndValue(0.0)
+                if not effect:
+                    effect = QGraphicsOpacityEffect(widget)
+                    widget.setGraphicsEffect(effect)
+                self.anim_out = QPropertyAnimation(effect, b"opacity")
+                self.anim_out.setDuration(250)
+                self.anim_out.setStartValue(1.0)
+                self.anim_out.setEndValue(0.0)
                 self.anim_out.setEasingCurve(QEasingCurve.InOutQuad)
                 self.anim_out.finished.connect(lambda p=path_to_remove: self.remove_path(p))
-                self.anim_out.start(QPropertyAnimation.DeleteWhenStopped); break
+                self.anim_out.start(QPropertyAnimation.DeleteWhenStopped)
+                break
 
 class DropFrame(QFrame):
     def __init__(self, title, parent=None):
@@ -368,14 +412,19 @@ class DropFrame(QFrame):
         self.setObjectName("DropFrame")
         self.setAcceptDrops(True)
         main_layout = QVBoxLayout(self)
-        title_layout = QHBoxLayout(); title_layout.setContentsMargins(0, 0, 0, 5)
+        title_layout = QHBoxLayout()
+        title_layout.setContentsMargins(0, 0, 0, 5)
         self.title_label = QLabel(f"<b>{title}</b>", objectName="TitleLabel")
-        title_layout.addWidget(self.title_label); title_layout.addStretch()
-        self.add_button = QPushButton(get_icon("plus", "fa5s.plus"), ""); self.add_button.setFixedSize(28, 28)
+        title_layout.addWidget(self.title_label)
+        title_layout.addStretch()
+        self.add_button = QPushButton(get_icon("plus", "fa5s.plus"), "")
+        self.add_button.setFixedSize(28, 28)
         self.add_button.setObjectName("ToolbarButton")
-        self.add_button.setToolTip(f"Add {title.lower()}"); title_layout.addWidget(self.add_button)
+        self.add_button.setToolTip(f"Add {title.lower()}")
+        title_layout.addWidget(self.add_button)
         self.path_list = AnimatedPathListWidget()
-        main_layout.addLayout(title_layout); main_layout.addWidget(self.path_list)
+        main_layout.addLayout(title_layout)
+        main_layout.addWidget(self.path_list)
         self.add_button.clicked.connect(self._on_add_clicked)
         self.add_button.setIconSize(QSize(14, 14))
         self.button_anim = QPropertyAnimation(self.add_button, b"iconSize")
@@ -395,20 +444,24 @@ class DropFrame(QFrame):
         return super().eventFilter(watched, event)
     def _on_add_clicked(self):
         path = QFileDialog.getExistingDirectory(self, f"Select a {self.title_label.text().lower()}")
-        if path: self.path_list.add_path(path)
+        if path:
+            self.path_list.add_path(path)
     def mouseDoubleClickEvent(self, event: QMouseEvent):
         self._on_add_clicked()
         super().mouseDoubleClickEvent(event)
     def dragEnterEvent(self, event: QMouseEvent):
-        if event.mimeData().hasUrls(): event.acceptProposedAction()
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
     def dragLeaveEvent(self, event: QMouseEvent):
         event.accept()
     def dropEvent(self, event: QMouseEvent):
         if event.mimeData().hasUrls():
             for url in event.mimeData().urls():
-                if os.path.isdir(url.toLocalFile()): self.path_list.add_path(url.toLocalFile())
+                if os.path.isdir(url.toLocalFile()):
+                    self.path_list.add_path(url.toLocalFile())
             event.acceptProposedAction()
-        else: event.ignore()
+        else:
+            event.ignore()
 
 class MHLVerifyDialog(QDialog):
     add_job_requested = Signal(str, str)
@@ -446,10 +499,12 @@ class MHLVerifyDialog(QDialog):
         self.target_dir_edit.textChanged.connect(self.check_inputs)
     def browse_mhl(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select MHL File", "", "MHL Files (*.mhl)")
-        if path: self.mhl_path_edit.setText(path)
+        if path:
+            self.mhl_path_edit.setText(path)
     def browse_dir(self):
         path = QFileDialog.getExistingDirectory(self, "Select Target Directory")
-        if path: self.target_dir_edit.setText(path)
+        if path:
+            self.target_dir_edit.setText(path)
     def check_inputs(self):
         mhl_ok = os.path.isfile(self.mhl_path_edit.text())
         dir_ok = os.path.isdir(self.target_dir_edit.text())
@@ -474,14 +529,24 @@ class ProjectManagerDialog(QDialog):
         self.recent_projects_paths = recent_projects
         layout.addWidget(self.project_list)
         buttons_layout = QHBoxLayout()
-        new_button = QPushButton("Create New Project"); new_button.setObjectName("ToolbarButton"); new_button.clicked.connect(self.new_project_requested)
-        open_other_button = QPushButton("Open Other..."); open_other_button.setObjectName("ToolbarButton"); open_other_button.clicked.connect(self.open_other)
-        open_selected_button = QPushButton("Open Selected"); open_selected_button.setObjectName("PrimaryButton"); open_selected_button.clicked.connect(self.open_selected)
+        new_button = QPushButton("Create New Project")
+        new_button.setObjectName("ToolbarButton")
+        new_button.clicked.connect(self.new_project_requested)
+        open_other_button = QPushButton("Open Other...")
+        open_other_button.setObjectName("ToolbarButton")
+        open_other_button.clicked.connect(self.open_other)
+        open_selected_button = QPushButton("Open Selected")
+        open_selected_button.setObjectName("PrimaryButton")
+        open_selected_button.clicked.connect(self.open_selected)
         open_selected_button.setDefault(True)
-        quit_button = QPushButton("Quit"); quit_button.setObjectName("ToolbarButton"); quit_button.clicked.connect(self.reject)
-        buttons_layout.addWidget(new_button); buttons_layout.addWidget(open_other_button)
+        quit_button = QPushButton("Quit")
+        quit_button.setObjectName("ToolbarButton")
+        quit_button.clicked.connect(self.reject)
+        buttons_layout.addWidget(new_button)
+        buttons_layout.addWidget(open_other_button)
         buttons_layout.addStretch()
-        buttons_layout.addWidget(open_selected_button); buttons_layout.addWidget(quit_button)
+        buttons_layout.addWidget(open_selected_button)
+        buttons_layout.addWidget(quit_button)
         layout.addLayout(buttons_layout)
     def open_selected(self):
         selected_item = self.project_list.currentItem()
@@ -519,7 +584,8 @@ class SettingsDialog(QDialog):
         self._setup_pdf_tab()
         self._setup_naming_tab()
         self.naming_tab.setEnabled(project_loaded)
-        if not project_loaded: self.tabs.setTabToolTip(2, "A project must be open to configure naming presets.")
+        if not project_loaded:
+            self.tabs.setTabToolTip(2, "A project must be open to configure naming presets.")
         button_layout = QHBoxLayout()
         save_button = QPushButton("Save"); save_button.setObjectName("PrimaryButton"); save_button.clicked.connect(self.accept)
         cancel_button = QPushButton("Cancel"); cancel_button.setObjectName("ToolbarButton"); cancel_button.clicked.connect(self.reject)

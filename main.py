@@ -30,7 +30,6 @@ from ui_components import (
 from workers import EjectWorker
 from job_manager import JobManager
 from report_manager import ReportManager
-
 def _load_fonts():
     if sys.platform != "darwin":
         return
@@ -467,9 +466,9 @@ class MainWindow(QMainWindow):
                         self.dest_frame.path_list.remove_path(path)
         self.mounted_drives = current_drives
 
-            if self.project_path:
-
-                self._save_project_state()
+    def new_project(self):
+        if self.project_path:
+            self._save_project_state()
         project_name, ok = QInputDialog.getText(self, "New Project", "Enter Project Name:")
         if ok and project_name:
             if any(char in project_name for char in '/\\:*?"<>|'):
@@ -486,7 +485,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", f"Could not create project directory: {e}")
 
     def open_project(self):
-        if self.project_path: self._save_project_state()
+        if self.project_path:
+            self._save_project_state()
         path = QFileDialog.getExistingDirectory(self, "Select Project Folder", dir=PROJECTS_BASE_DIR)
         if path and os.path.isdir(os.path.join(path, ".dit_project")):
             self._load_project(path)
@@ -494,7 +494,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Invalid Project", "The selected folder is not a valid project.")
     
     def _load_project(self, path):
-        if self.project_path: self._save_project_state()
+        if self.project_path:
+            self._save_project_state()
         self.project_path = path
         project_name = os.path.basename(path)
         self.setWindowTitle(f"{APP_NAME} - {project_name}")
@@ -524,7 +525,8 @@ class MainWindow(QMainWindow):
                  "source_metadata": self.source_metadata, "naming_preset": self.naming_preset, "card_counter": self.card_counter}
         state_path = os.path.join(self.project_path, ".dit_project", "project_state.json")
         try:
-            with open(state_path, 'w') as f: json.dump(state, f, indent=2, default=dt_handler)
+            with open(state_path, 'w') as f:
+                json.dump(state, f, indent=2, default=dt_handler)
         except Exception as e:
             print(f"Error saving project state: {e}")
 
