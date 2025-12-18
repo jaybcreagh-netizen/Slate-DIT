@@ -10,3 +10,14 @@ dist/
 
 # macOS
 .DS_Store
+
+# Installer files
+*.dmg
+
+# Resources
+resources/
+.genkit/
+
+# FFmpeg binaries
+ffmpeg
+ffprobe
