@@ -1,6 +1,7 @@
 # job_manager.py
 import time
 import os
+import queue
 from datetime import datetime
 from collections import deque
 from PySide6.QtCore import QObject, Signal
@@ -43,6 +44,8 @@ class JobManager(QObject):
         self.last_progress_update_time = 0
 
     def create_job_from_ui(self):
+        # Allow starting a new job even if another is scanning, but for simplicity
+        # we still restrict one scan at a time if the UI depends on it (which it does slightly).
         if self.scan_worker and self.scan_worker.isRunning():
             return
         
@@ -52,6 +55,9 @@ class JobManager(QObject):
         if not sources or not destinations:
             QMessageBox.warning(self.window, "Missing Paths", "Please add at least one source and one destination.")
             return
+
+        file_queue = queue.Queue()
+        job_id = f"Job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.get_all_jobs()) + 1}"
 
         job_params = {
             "sources": sources,
@@ -69,39 +75,65 @@ class JobManager(QObject):
             "defer_post_process": self.window.global_settings.get("defer_post_process", False)
         }
 
-        self.scan_worker = ScanWorker(job_params)
-        self.scan_worker.scan_finished.connect(self.on_scan_finished)
-        self.scan_worker.finished.connect(lambda: self.window._set_controls_enabled(True))
-        self.window._set_controls_enabled(False)
-        self.scan_worker.start()
-
-    def on_scan_finished(self, job_params):
-        job_id = f"Job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.get_all_jobs()) + 1}"
-        
-        destinations = set()
-        for paths in job_params['resolved_dests'].values():
-            if paths:
-                common_base = os.path.dirname(os.path.commonpath(paths))
-                destinations.add(common_base)
-
+        # Create the Job object immediately
         job = {
             "id": job_id,
-            "sources": job_params['sources'],
-            "destinations": list(destinations),
-            "resolved_dests": job_params['resolved_dests'],
+            "sources": sources,
+            "destinations": destinations,
+            "resolved_dests": {}, # Will be populated on scan finish
             "checksum_method": job_params['checksum_method'],
-            "status": "Queued",
+            "status": "Scanning",
             "eject_on_completion": job_params['eject_on_completion'],
             "skip_existing": job_params['skip_existing'],
             "resume_partial": job_params['resume_partial'],
             "metadata": job_params['metadata'],
             "verification_mode": job_params['verification_mode'],
             "defer_post_process": job_params['defer_post_process'],
-            "report": {"total_size": job_params['total_size']}
+            "report": {"total_size": 0}, # Initial size is 0
+            "file_queue": file_queue, # Runtime object
         }
+
+        self.scan_worker = ScanWorker(job_params, file_queue)
+        self.scan_worker.scan_progress.connect(lambda f, s: self.on_scan_progress(job, f, s))
+        self.scan_worker.scan_finished.connect(lambda params: self.on_scan_finished_update_job(job, params))
+
+        # We don't block controls anymore, or maybe we do just for simplicity of "adding" jobs?
+        # The user requested scalability. Non-blocking UI is key.
+        # But we must ensure the user doesn't change naming presets while scan is running for THIS job.
+        # For now, let's keep controls disabled during the "add" phase, but we want the transfer to start ASAP.
+        # Actually, "Add to Queue" usually just adds it. If we auto-start, we need `start_or_pause_queue` logic.
         
         self.add_job_to_queue(job)
         self.window.card_counter += 1
+        self.scan_worker.start()
+
+        # Explicitly start the queue if it's not already running.
+        # This ensures the TransferWorker picks up the new job (which is in "Scanning" state) immediately.
+        # We might need to adjust `_start_available_jobs` to pick up "Scanning" jobs too.
+        if not self.is_running:
+             self.start_or_pause_queue()
+
+    def on_scan_progress(self, job, files_found, current_total_size):
+        if 'report' in job:
+            job['report']['total_size'] = current_total_size
+        # Force update total queue size if this job is running/queued
+        if self.is_running:
+             copy_jobs = [j for j in self.job_queue if j.get("job_type", "copy") == "copy"]
+             # Recalculate total queue size from ALL jobs, as this one is updating
+             current_queue_total = sum(j['report']['total_size'] for j in copy_jobs)
+             self.total_queue_size = current_queue_total + sum(j['report']['total_size'] for j in self.active_workers if j.get("job_type", "copy") == "copy")
+
+    def on_scan_finished_update_job(self, job, job_params):
+        # Update the job record with final scan details (for report/restart)
+        job['resolved_dests'] = job_params['resolved_dests']
+        job['report']['total_size'] = job_params['total_size']
+        job['all_source_files'] = job_params['all_source_files']
+
+        # If the job hasn't started yet (unlikely if queue is running), update status
+        if job['status'] == "Scanning":
+            job['status'] = "Queued"
+
+        self.job_list_changed.emit()
 
     def set_max_concurrent_jobs(self, count):
         self.max_concurrent_jobs = count
@@ -192,7 +224,17 @@ class JobManager(QObject):
             if job['status'] == 'Cancelled':
                 self.completed_jobs.append(job)
                 continue
-            job['status'] = 'Running'
+
+            # Allow "Scanning" jobs to start running (TransferWorker will consume from queue)
+            # If it's "Queued" or "Scanning", it's valid to start.
+            if job['status'] == "Scanning":
+                 # Keep it as "Scanning" or change to "Running"?
+                 # If we change to "Running", the UI icon updates.
+                 # The ScanWorker is still running in background.
+                 job['status'] = 'Running'
+            else:
+                 job['status'] = 'Running'
+
             job_id = job['id']
             job_type = job.get("job_type", "copy")
             if job_type == "mhl_verify":

@@ -7,6 +7,7 @@ import platform
 import subprocess
 import xxhash
 import hashlib
+import queue
 from xml.etree import ElementTree as ET
 from datetime import datetime
 
@@ -24,41 +25,70 @@ from utils import check_command, resolve_path_template
 # --- ScanWorker, EjectWorker, PostProcessWorker are unchanged ---
 class ScanWorker(QThread):
     scan_finished = Signal(dict)
-    def __init__(self, job_params, parent=None):
+    scan_progress = Signal(int, int) # files_found, current_total_size
+
+    def __init__(self, job_params, file_queue, parent=None):
         super().__init__(parent)
         self.job_params = job_params
+        self.file_queue = file_queue
+
     def run(self):
         sources = self.job_params['sources']
         destinations = self.job_params['destinations']
         all_source_files = {}
         total_size = 0
         resolved_dests = {}
-        for source_path in sources:
-            for root, _, files in os.walk(source_path):
-                for file in files:
-                    full_path = os.path.join(root, file)
-                    all_source_files[full_path] = source_path
-                    try:
-                        total_size += os.path.getsize(full_path)
-                    except FileNotFoundError:
-                        continue
-                    resolved_dests[full_path] = []
-                    relative_path = os.path.relpath(full_path, source_path)
-                    for dest_root in destinations:
-                        final_dest_root = dest_root
-                        if self.job_params['has_template']:
-                            source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
-                            resolved_template_path = resolve_path_template(
-                                self.job_params['naming_preset']['template'],
-                                self.job_params['naming_preset'],
-                                self.job_params['card_counter'],
-                                source_folder_name
-                            )
-                            final_dest_root = os.path.join(dest_root, resolved_template_path)
-                        elif self.job_params['create_source_folder']:
-                            source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
-                            final_dest_root = os.path.join(dest_root, source_folder_name)
-                        resolved_dests[full_path].append(os.path.join(final_dest_root, relative_path))
+        files_found = 0
+
+        try:
+            for source_path in sources:
+                for root, _, files in os.walk(source_path):
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        all_source_files[full_path] = source_path
+                        try:
+                            file_size = os.path.getsize(full_path)
+                            total_size += file_size
+                        except FileNotFoundError:
+                            continue
+
+                        files_found += 1
+                        file_dests = []
+                        relative_path = os.path.relpath(full_path, source_path)
+
+                        for dest_root in destinations:
+                            final_dest_root = dest_root
+                            if self.job_params['has_template']:
+                                source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
+                                resolved_template_path = resolve_path_template(
+                                    self.job_params['naming_preset']['template'],
+                                    self.job_params['naming_preset'],
+                                    self.job_params['card_counter'],
+                                    source_folder_name
+                                )
+                                final_dest_root = os.path.join(dest_root, resolved_template_path)
+                            elif self.job_params['create_source_folder']:
+                                source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
+                                final_dest_root = os.path.join(dest_root, source_folder_name)
+                            file_dests.append(os.path.join(final_dest_root, relative_path))
+
+                        resolved_dests[full_path] = file_dests
+
+                        # Push to queue for immediate processing
+                        task = {
+                            'source': full_path,
+                            'destinations': file_dests,
+                            'size': file_size,
+                            'base_source_path': source_path
+                        }
+                        self.file_queue.put(task)
+
+                        if files_found % 10 == 0:
+                            self.scan_progress.emit(files_found, total_size)
+
+        finally:
+            self.file_queue.put(None) # Sentinel
+
         self.job_params['all_source_files'] = all_source_files
         self.job_params['total_size'] = total_size
         self.job_params['resolved_dests'] = resolved_dests
@@ -215,13 +245,20 @@ class TransferWorker(QThread):
             'job_id': self.job['id'], 'start_time': datetime.now(), 
             'sources': self.job['sources'], 'destinations': self.job['destinations'],
             'checksum_method': checksum_method, 'files': [],
-            'status': 'Completed', 'total_size': self.job['report']['total_size'], 'errors': []
+            'status': 'Completed', 'total_size': 0, 'errors': []
         }
         
         total_bytes_processed_in_job = 0
         job_start_time = time.monotonic()
 
-        for source_file_path in self.job['resolved_dests']:
+        # Pull from the shared queue
+        file_queue = self.job.get('file_queue')
+        if not file_queue:
+            # Fallback for old style calls or tests without queue
+            # (Though in this refactor we aim to always use queue)
+            pass
+
+        while True:
             # --- Main control loop for each file ---
             while self.is_paused:
                 if self.is_cancelled: break
@@ -231,36 +268,52 @@ class TransferWorker(QThread):
                 self.job_finished.emit(report_data)
                 return
 
-            base_source_path = next((sp for sp in self.job['sources'] if source_file_path.startswith(sp)), None)
+            task = file_queue.get()
+            if task is None:
+                file_queue.task_done()
+                break # Sentinel received, all files processed
+
+            source_file_path = task['source']
+            dest_paths = task['destinations']
+            base_source_path = task['base_source_path']
+
             file_info = {
                 'source': source_file_path, 'destinations': [], 'status': 'Failed', 
                 'checksum': '', 'custom_metadata': self.job['metadata'].get(base_source_path, {})
             }
 
             try:
-                file_size = os.path.getsize(source_file_path)
+                # Re-check file size just in case it changed since scan
+                try:
+                    current_size = os.path.getsize(source_file_path)
+                    if current_size != task['size']:
+                         # Update to current size to avoid false verification failures
+                         file_size = current_size
+                    else:
+                         file_size = task['size']
+                except OSError:
+                    file_size = task['size'] # Fallback to scan size if we can't read it now
+
                 file_info['size'] = file_size
 
-                # --- Core Logic Change ---
+                # --- Core Logic ---
                 source_hash = None
                 hasher = None
                 if verification_mode == "full":
                     self.file_progress.emit(0, "Copying & Hashing...", source_file_path, 0.0)
                     hasher = xxhash.xxh64() if checksum_method == "xxHash (Fast)" else hashlib.md5()
                     
-                    # This single call now does the copy and calculates the source hash simultaneously
-                    self._copy_and_hash_file(source_file_path, self.job['resolved_dests'][source_file_path], hasher)
+                    self._copy_and_hash_file(source_file_path, dest_paths, hasher)
                     source_hash = hasher.hexdigest()
                     file_info['checksum'] = source_hash
                 else:
-                    # If not verifying by hash, just do a simple copy.
                     self.file_progress.emit(0, "Copying...", source_file_path, 0.0)
-                    for dest_path in self.job['resolved_dests'][source_file_path]:
-                        self._copy_and_hash_file(source_file_path, [dest_path], None) # Pass None for hasher
+                    for dest_path in dest_paths:
+                        self._copy_and_hash_file(source_file_path, [dest_path], None)
                 
-                # --- Verification Logic (Largely Unchanged) ---
+                # --- Verification Logic ---
                 verified_all_dests = True
-                for dest_path in self.job['resolved_dests'][source_file_path]:
+                for dest_path in dest_paths:
                     dest_info = {'path': dest_path, 'verified': False}
                     if not os.path.exists(dest_path) or file_size != os.path.getsize(dest_path):
                         verified_all_dests = False
@@ -290,16 +343,24 @@ class TransferWorker(QThread):
                 report_data['errors'].append(error_str)
                 self.error.emit(error_str, self.job['id'])
 
+            file_queue.task_done()
+
             total_bytes_processed_in_job += file_info.get('size', 0)
             elapsed_time = time.monotonic() - job_start_time
             speed_mbps = (total_bytes_processed_in_job / (1024*1024)) / elapsed_time if elapsed_time > 0 else 0
-            bytes_remaining = report_data['total_size'] - total_bytes_processed_in_job
-            eta_seconds = bytes_remaining / (speed_mbps * 1024 * 1024) if speed_mbps > 0 else -1
-            self.progress.emit(self.job['id'], total_bytes_processed_in_job, speed_mbps, int(eta_seconds))
+
+            # Note: total_size in report_data is not updated here because it is dynamic.
+            # The UI handles the total size and ETA based on signals.
+            # We pass -1 for ETA if we don't trust the total size yet, or let UI handle it.
+            # However, the JobManager now needs to know the "current" total size from the scanner.
+            # For now, we will just emit progress.
+
+            self.progress.emit(self.job['id'], total_bytes_processed_in_job, speed_mbps, -1)
 
         if report_data['errors']:
             report_data['status'] = 'Completed with errors'
         report_data['end_time'] = datetime.now()
+        report_data['total_size'] = total_bytes_processed_in_job
         self.job_finished.emit(report_data)
 
     def _copy_and_hash_file(self, src_path, dest_paths, hasher):

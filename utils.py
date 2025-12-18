@@ -29,6 +29,7 @@ def get_icon_for_path(path):
 
 def format_bytes(byte_count):
     if byte_count is None: return "N/A"
+    if byte_count == 0: return "0.00 B"
     power = 1024; n = 0
     power_labels = {0: '', 1: 'KB', 2: 'MB', 3: 'GB', 4: 'TB'}
     while byte_count >= power and n < len(power_labels) -1 :
