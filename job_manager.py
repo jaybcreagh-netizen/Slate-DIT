@@ -280,7 +280,7 @@ class JobManager(QObject):
         if len(self.speed_history) > 1:
             time_delta = self.speed_history[-1][0] - self.speed_history[0][0]
             byte_delta = self.speed_history[-1][1] - self.speed_history[0][1]
-            if time_delta > 0:
+            if time_delta > 0.001:
                 speed_bps = byte_delta / time_delta
                 overall_speed_mbps = speed_bps / (1024 * 1024)
 
