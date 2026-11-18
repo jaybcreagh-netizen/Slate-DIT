@@ -1,5 +1,6 @@
 # workers.py
 import os
+import shutil
 import time
 import json
 import platform
@@ -19,8 +20,9 @@ import rawpy
 
 import copy_engine
 import manifest
+from app_log import log
 from config import APP_NAME, APP_VERSION, FFMPEG_PATH, FFPROBE_PATH
-from utils import check_command, resolve_path_template
+from utils import check_command, format_bytes, resolve_path_template
 
 class ScanWorker(QThread):
     scan_finished = Signal(dict)
@@ -30,6 +32,23 @@ class ScanWorker(QThread):
         super().__init__(parent)
         self.job_params = job_params
         self.file_queue = file_queue
+        self.job = None      # set by the job manager; lets the scan stop the copy early
+        self.stop = False    # set when the user cancels or quits
+
+    def _volume(self, path):
+        """(id of the drive `path` is on, bytes free on it), using the nearest folder that exists."""
+        probe = os.path.abspath(path)
+        while not os.path.exists(probe) and os.path.dirname(probe) != probe:
+            probe = os.path.dirname(probe)
+        return os.stat(probe).st_dev, shutil.disk_usage(probe).free
+
+    def _out_of_space(self, destination, free):
+        message = (f"Not enough free space on '{destination}'. Only {format_bytes(free)} is free and this copy needs more. "
+                   f"Slate stopped before filling the drive. Free up space or choose another drive, then run the copy again.")
+        if self.job is not None:
+            self.job['abort_reason'] = message
+        else:
+            self._report_problem(message)
 
     def _dest_root(self, dest_root, source_path):
         """The folder at this destination that will hold this source's files."""
@@ -59,6 +78,20 @@ class ScanWorker(QThread):
         files_found = 0
 
         try:
+            # Free space on each destination drive now, before anything is written.
+            # As files are found, the space they need is added up per drive, so a
+            # drive that is too small is caught in the first seconds, not half way.
+            drive_of, free_on, needed_on = [], {}, {}
+            for dest in destinations:
+                try:
+                    drive, free = self._volume(dest)
+                except OSError:
+                    drive, free = None, None
+                drive_of.append(drive)
+                if drive is not None:
+                    free_on.setdefault(drive, free)
+                    needed_on.setdefault(drive, 0)
+
             for source_path in sources:
                 # Worked out once per source, so a copy that runs past midnight
                 # does not split one card across two dated folders.
@@ -68,7 +101,11 @@ class ScanWorker(QThread):
                     self._report_problem(f"Could not read '{error.filename or source_path}': {error.strerror or error}")
 
                 for root, _, files in os.walk(source_path, onerror=on_walk_error):
+                    if self.stop:
+                        break
                     for file in files:
+                        if self.stop:
+                            break
                         full_path = os.path.join(root, file)
                         try:
                             file_size = os.path.getsize(full_path)
@@ -82,6 +119,17 @@ class ScanWorker(QThread):
                         relative_path = os.path.relpath(full_path, source_path)
                         file_dests = [os.path.join(dest_root, relative_path) for dest_root in dest_roots]
                         resolved_dests[full_path] = file_dests
+
+                        for dest, drive, file_dest in zip(destinations, drive_of, file_dests):
+                            if drive is None or os.path.lexists(file_dest):
+                                continue  # already there: it will be checked, not written
+                            needed_on[drive] += file_size
+                            if needed_on[drive] > free_on[drive]:
+                                self._out_of_space(dest, free_on[drive])
+                                self.stop = True
+                                break
+                        if self.stop:
+                            break
 
                         # Push to queue for immediate processing
                         task = {
@@ -145,6 +193,7 @@ class PostProcessWorker(QThread):
         self.project_path = project_path
         self._ffprobe_available = check_command(FFPROBE_PATH)
         self._ffmpeg_available = check_command(FFMPEG_PATH)
+        self.stop = False  # set when the app is closing
     def run(self):
         if not self.job or 'report' not in self.job or 'files' not in self.job['report']:
             if self.job:
@@ -154,6 +203,8 @@ class PostProcessWorker(QThread):
         total_files = len(files_to_process)
         job_id = self.job['id']
         for i, file_info in enumerate(files_to_process):
+            if self.stop:
+                return
             self.progress.emit(i + 1, total_files, os.path.basename(file_info['source']))
             updates = {}
             verified_dest = next((d['path'] for d in file_info['destinations'] if d.get('verified')), None)
@@ -229,7 +280,7 @@ class PostProcessWorker(QThread):
             img.save(thumb_path, 'JPEG', quality=85)
             return thumb_path
         except Exception as e:
-            print(f"Could not create thumbnail for {image_path}: {e}")
+            log.warning("Could not create thumbnail for %s: %s", image_path, e)
             return None
     def _get_thumb_path(self, file_path):
         temp_dir = os.path.join(self.project_path, ".dit_project", "thumbnails")
@@ -260,7 +311,8 @@ class TransferWorker(QThread):
         total_bytes_processed_in_job = 0
         job_start_time = time.monotonic()
         file_queue = self.job['file_queue']
-        control = copy_engine.Control(lambda: self.is_paused, lambda: self.is_cancelled)
+        control = copy_engine.Control(lambda: self.is_paused,
+                                      lambda: self.is_cancelled or bool(self.job.get('abort_reason')))
         # destination folder -> the verified files in it, for the manifest
         verified_by_root = {}
         sources_with_problems = set()
@@ -269,7 +321,13 @@ class TransferWorker(QThread):
             report_data['errors'].append(message)
             if base_source_path:
                 sources_with_problems.add(base_source_path)
+            log.error("[%s] %s", self.job['id'], message)
             self.error.emit(message, self.job['id'])
+
+        def stopped_early():
+            # The scan found a drive that cannot hold this copy.
+            fail(self.job['abort_reason'])
+            sources_with_problems.update(self.job['sources'])
 
         def cancelled():
             report_data['status'] = 'Cancelled'
@@ -284,6 +342,9 @@ class TransferWorker(QThread):
             if self.is_cancelled:
                 cancelled()
                 return
+            if self.job.get('abort_reason'):
+                stopped_early()
+                break
 
             task = file_queue.get()
             if task is None:
@@ -340,8 +401,11 @@ class TransferWorker(QThread):
 
             except copy_engine.CopyCancelled:
                 file_queue.task_done()
-                cancelled()
-                return
+                if self.is_cancelled:
+                    cancelled()
+                    return
+                stopped_early()
+                break
             except Exception as e:
                 file_info['status'] = f'Error: {e}'; report_data['files'].append(file_info)
                 fail(f"Error processing {name}: {e}", base_source_path)

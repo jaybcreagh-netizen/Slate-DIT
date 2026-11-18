@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QSpinBox, QGraphicsOpacityEffect, QSizePolicy
 )
 
+from app_log import log
 from utils import get_icon, get_icon_for_path, format_bytes, resolve_path_template, job_status_style
 
 class ToggleSwitch(QWidget):
@@ -283,7 +284,7 @@ class PathListItem(QWidget):
                 self.space_label.setStyleSheet("color: #888;")
                 text_layout.addWidget(self.space_label)
             except Exception as e:
-                print(f"Could not get disk usage for {path}: {e}")
+                log.warning("Could not get disk usage for %s: %s", path, e)
         self.remove_button = QPushButton(get_icon("xmark.circle.fill", "fa5s.times", color="gray"), "")
         self.remove_button.setFlat(True)
         self.remove_button.setFixedSize(24, 24)
@@ -366,7 +367,7 @@ class PathListWidget(QListWidget):
             else:
                 subprocess.run(["xdg-open", path])
         except Exception as e:
-            print(f"Error opening path {path}: {e}")
+            log.warning("Error opening path %s: %s", path, e)
 
 class AnimatedPathListWidget(PathListWidget):
     def __init__(self, parent=None):

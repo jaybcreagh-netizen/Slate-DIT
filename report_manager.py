@@ -14,6 +14,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 
 from config import APP_NAME, APP_VERSION, FFMPEG_PATH, FFPROBE_PATH
+from app_log import log
 from utils import format_bytes
 from workers import PostProcessWorker, ReportWorker
 
@@ -32,7 +33,7 @@ class ContactSheetItem(Flowable):
                 img.hAlign = 'CENTER'
                 img.drawOn(self.canv, 0, 15)
             except Exception as e:
-                print(f"Error drawing image {self.image_path} in contact sheet: {e}")
+                log.warning("Error drawing image %s in contact sheet: %s", self.image_path, e)
                 self.canv.drawString(10, self.height / 2, "Image Error")
         
         self.canv.setFont("Helvetica", 6)
@@ -287,7 +288,7 @@ class ReportManager:
                     thumb_paths.append(thumb_path)
             return thumb_paths
         except (subprocess.CalledProcessError, FileNotFoundError, ValueError) as e:
-            print(f"Could not generate filmstrip for {video_path}: {e}")
+            log.warning("Could not generate filmstrip for %s: %s", video_path, e)
             return []
 
     def save_mhl_manifest(self, report):

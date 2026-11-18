@@ -23,6 +23,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 import resources_rc
 
 from config import APP_NAME, PROJECTS_BASE_DIR
+from app_log import log, setup_logging, LOG_PATH
 from utils import get_icon, format_eta
 from ui_components import (
     ProjectManagerDialog, SettingsDialog, MetadataDialog, DropFrame, MHLVerifyDialog, JobListItem, ToggleSwitch
@@ -55,10 +56,9 @@ def _load_fonts():
                 raise RuntimeError(f"Could not open resource: {resource_path}")
 
         qta.load_font('sfs', 'SF-Pro.ttf', 'sfs-2-charmap.json', directory=temp_dir)
-        print("SF Symbols font loaded successfully from temporary directory.")
 
     except Exception as e:
-        print(f"CRITICAL: Could not load SF Symbols font from resources. Error: {e}")
+        log.error("Could not load SF Symbols font from resources: %s", e)
 
 
 class MainWindow(QMainWindow):
@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
             with open("style.qss", "r") as f:
                 self.setStyleSheet(f.read())
         except FileNotFoundError:
-            print("WARNING: style.qss not found. Using default styles.")
+            log.warning("style.qss not found. Using default styles.")
 
         main_widget = QWidget()
         main_layout = QVBoxLayout(main_widget)
@@ -284,6 +284,9 @@ class MainWindow(QMainWindow):
         settings_action = QAction("Settings...", self)
         settings_action.triggered.connect(self.show_settings_dialog)
         file_menu.addAction(settings_action)
+        show_log_action = QAction("Show Log File", self)
+        show_log_action.triggered.connect(lambda: self.source_frame.path_list.open_in_explorer(os.path.dirname(LOG_PATH)))
+        file_menu.addAction(show_log_action)
         file_menu.addSeparator()
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
@@ -305,6 +308,7 @@ class MainWindow(QMainWindow):
         self.job_manager.play_sound.connect(self.play_sound)
         self.job_manager.mhl_verify_report_ready.connect(self.show_mhl_verify_report)
         self.job_manager.copy_problems_found.connect(self.show_copy_problems)
+        self.job_manager.job_record_changed.connect(self._save_project_state)
         
         self.add_to_queue_button.clicked.connect(self.job_manager.create_job_from_ui)
         self.start_queue_button.clicked.connect(self.job_manager.start_or_pause_queue)
@@ -447,7 +451,7 @@ class MainWindow(QMainWindow):
         try:
             current_drives = set(p.mountpoint for p in psutil.disk_partitions())
         except Exception as e:
-            print(f"Error getting disk partitions: {e}")
+            log.warning("Error getting disk partitions: %s", e)
             return
         new_drives, removed_drives = current_drives - self.mounted_drives, self.mounted_drives - current_drives
         if new_drives:
@@ -509,7 +513,7 @@ class MainWindow(QMainWindow):
             self.mounted_drives = {p.mountpoint for p in psutil.disk_partitions()}
             self.drive_monitor_timer.start()
         except Exception as e:
-            print(f"Could not start drive monitor: {e}")
+            log.warning("Could not start drive monitor: %s", e)
         self.show()
 
     def _save_project_state(self):
@@ -518,15 +522,21 @@ class MainWindow(QMainWindow):
         def dt_handler(o):
             if isinstance(o, datetime):
                 return o.isoformat()
+        runtime_only = ("file_queue", "all_source_files", "resolved_dests", "abort_reason")
+        completed_jobs = [{k: v for k, v in job.items() if k not in runtime_only} for job in self.job_manager.completed_jobs]
         state = {"sources": self.source_frame.path_list.get_all_paths(), "destinations": self.dest_frame.path_list.get_all_paths(),
-                 "checksum_method": self.checksum_combo.currentText(), "completed_jobs": self.job_manager.completed_jobs,
+                 "checksum_method": self.checksum_combo.currentText(), "completed_jobs": completed_jobs,
                  "source_metadata": self.source_metadata, "naming_preset": self.naming_preset, "card_counter": self.card_counter}
         state_path = os.path.join(self.project_path, ".dit_project", "project_state.json")
         try:
-            with open(state_path, 'w') as f:
+            # Written to a temporary file first, then swapped in, so a crash
+            # while saving cannot leave a broken project file.
+            temp_path = state_path + ".saving"
+            with open(temp_path, 'w') as f:
                 json.dump(state, f, indent=2, default=dt_handler)
+            os.replace(temp_path, state_path)
         except Exception as e:
-            print(f"Error saving project state: {e}")
+            log.error("Error saving project state: %s", e)
 
     def _load_project_state(self):
         state_path = os.path.join(self.project_path, ".dit_project", "project_state.json")
@@ -554,7 +564,7 @@ class MainWindow(QMainWindow):
                              job['report']['end_time'] = datetime.fromisoformat(job['report']['end_time'])
                 self.job_manager.completed_jobs = loaded_jobs
             except Exception as e:
-                print(f"Error loading project state: {e}")
+                log.error("Error loading project state: %s", e)
         self.update_job_list()
         self.update_folder_creation_mode()
 
@@ -829,20 +839,22 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Error", f"Could not save template: {e}")
 
     def closeEvent(self, event):
+        if self.job_manager.is_running:
+            reply = QMessageBox.question(self, "Exit Confirmation", "A copy is in progress. Stop it and exit?\n\nFiles already verified are kept. The file being copied right now is discarded.", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                event.ignore()
+                return
+        # Stop the background work and wait for it, so nothing is still
+        # writing when the window closes.
+        self.job_manager.shutdown()
         if self.project_path:
             self._save_project_state()
-        if self.job_manager.is_running:
-            reply = QMessageBox.question(self, "Exit Confirmation", "A transfer is in progress. Are you sure you want to exit?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                self.job_manager.cancel_queue()
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            event.accept()
+        log.info("%s closed", APP_NAME)
+        event.accept()
 
 if __name__ == '__main__':
     multiprocessing.freeze_support()
+    setup_logging()
     
     if not os.path.exists(PROJECTS_BASE_DIR):
         os.makedirs(PROJECTS_BASE_DIR)

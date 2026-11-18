@@ -1,13 +1,14 @@
 # job_manager.py
 import time
-import os
 import queue
 from datetime import datetime
 from collections import deque
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
 
+from app_log import log
 from copy_engine import find_path_conflict
+from keep_awake import KeepAwake
 from workers import TransferWorker, PostProcessWorker, MHLVerifyWorker, ScanWorker
 
 class JobManager(QObject):
@@ -22,6 +23,7 @@ class JobManager(QObject):
     play_sound = Signal(str)
     mhl_verify_report_ready = Signal(dict)
     copy_problems_found = Signal(dict)
+    job_record_changed = Signal()  # a job finished: time to save the project
 
     def __init__(self, window):
         super().__init__()
@@ -35,6 +37,7 @@ class JobManager(QObject):
         self.is_running = False
         self.is_paused = False
         self.current_queue_had_errors = False
+        self.keep_awake = KeepAwake()
         
         self.total_queue_size = 0
         self.total_bytes_processed_in_queue = 0
@@ -85,7 +88,6 @@ class JobManager(QObject):
             "id": job_id,
             "sources": sources,
             "destinations": destinations,
-            "resolved_dests": {}, # Will be populated on scan finish
             "checksum_method": job_params['checksum_method'],
             "status": "Scanning",
             "eject_on_completion": job_params['eject_on_completion'],
@@ -98,6 +100,7 @@ class JobManager(QObject):
         }
 
         self.scan_worker = ScanWorker(job_params, file_queue)
+        self.scan_worker.job = job
         self.scan_worker.scan_progress.connect(lambda f, s: self.on_scan_progress(job, f, s))
         self.scan_worker.scan_finished.connect(lambda params: self.on_scan_finished_update_job(job, params))
 
@@ -129,9 +132,8 @@ class JobManager(QObject):
 
     def on_scan_finished_update_job(self, job, job_params):
         # Update the job record with final scan details (for report/restart)
-        job['resolved_dests'] = job_params['resolved_dests']
-        job['report']['total_size'] = job_params['total_size']
-        job['all_source_files'] = job_params['all_source_files']
+        if job['status'] in ("Scanning", "Queued", "Running"):
+            job['report']['total_size'] = job_params['total_size']
 
         # If the job hasn't started yet (unlikely if queue is running), update status
         if job['status'] == "Scanning":
@@ -187,6 +189,7 @@ class JobManager(QObject):
             self.speed_history.clear()
             self.queue_start_time = time.monotonic()
             self.last_progress_update_time = self.queue_start_time
+            self.keep_awake.start()
             self.queue_state_changed.emit(self.is_running, self.job_queue)
             self._start_available_jobs()
         else:
@@ -204,23 +207,44 @@ class JobManager(QObject):
                     worker.pause()
             self.queue_state_changed.emit(self.is_running, self.job_queue)
 
-    def cancel_queue(self):
+    def cancel_queue(self, confirm=True):
         if not self.is_running:
             return
-        reply = QMessageBox.question(self.window, "Cancel Queue", "Are you sure you want to cancel all running and queued jobs?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            for worker in self.active_workers[:]:
-                worker.cancel()
-                job = worker.job
-                job['status'] = 'Cancelled'
-                self.job_queue.insert(0, job)
-            for job in self.job_queue:
-                if job['status'] != 'Cancelled':
-                    job['status'] = 'Cancelled'
-            self.is_running = False
-            self.is_paused = False
-            self.job_list_changed.emit()
-            self.queue_state_changed.emit(self.is_running, self.job_queue)
+        if confirm:
+            reply = QMessageBox.question(self.window, "Cancel Queue", "Are you sure you want to cancel all running and queued jobs?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply != QMessageBox.Yes:
+                return
+        log.info("Queue cancelled by user")
+        if self.scan_worker and self.scan_worker.isRunning():
+            self.scan_worker.stop = True
+        # Running jobs stop at the next chunk, clean up their half-written
+        # files, and report back as 'Cancelled' through on_job_finished.
+        for worker in self.active_workers[:]:
+            worker.cancel()
+        # Jobs that had not started yet are simply marked and set aside.
+        for job in self.job_queue:
+            job['status'] = 'Cancelled'
+            self.completed_jobs.append(job)
+        self.job_queue = []
+        self.is_running = False
+        self.is_paused = False
+        self.keep_awake.stop()
+        self.job_list_changed.emit()
+        self.queue_state_changed.emit(self.is_running, self.job_queue)
+
+    def shutdown(self, timeout_ms=15000):
+        """Called when the app closes: stop everything and wait for it to finish,
+        so no thread is still writing when the window goes away."""
+        self.cancel_queue(confirm=False)
+        self.post_process_queue.clear()
+        post = getattr(self, 'post_process_worker', None)
+        if post is not None:
+            post.stop = True
+        for thread in [*self.active_workers, self.scan_worker, post]:
+            if thread is not None and thread.isRunning():
+                if not thread.wait(timeout_ms):
+                    log.warning("A background task was still running when Slate closed")
+        self.keep_awake.stop()
 
     def _start_available_jobs(self):
         while len(self.active_workers) < self.max_concurrent_jobs and self.job_queue:
@@ -256,6 +280,11 @@ class JobManager(QObject):
             worker.finished.connect(lambda w=worker: self._on_worker_finished(w))
             self.active_workers.append(worker)
             self.job_list_changed.emit()
+            if job_type == "mhl_verify":
+                log.info("[%s] MHL check started: %s against %s", job_id, job['mhl_file'], job['target_dir'])
+            else:
+                log.info("[%s] Copy started: %s -> %s (%s, check: %s)", job_id, job['sources'], job['destinations'],
+                         job['checksum_method'], job.get('verification_mode', 'full'))
             worker.start()
 
     # --- START REFACTOR: Implement rolling average calculation ---
@@ -326,6 +355,7 @@ class JobManager(QObject):
         self.completed_jobs.append(finished_worker_job)
         finished_worker_job['status'] = report_data['status']
         finished_worker_job['report'] = report_data
+        self._log_finished(report_data)
 
         status_lower = report_data.get('status', '').lower()
         if 'error' in status_lower or 'failed' in status_lower or 'issues' in status_lower:
@@ -333,7 +363,8 @@ class JobManager(QObject):
             self.play_sound.emit("error")
             if finished_worker_job.get("job_type", "copy") == "copy":
                 self.copy_problems_found.emit(report_data)
-        elif not self.window.global_settings.get("defer_post_process", False) and finished_worker_job.get("job_type", "copy") == "copy":
+        elif (report_data.get('status') == 'Completed' and finished_worker_job.get("job_type", "copy") == "copy"
+              and not self.window.global_settings.get("defer_post_process", False)):
             self.post_process_queue.append(finished_worker_job)
             self._start_post_processing_if_needed()
         self.job_list_changed.emit()
@@ -342,11 +373,30 @@ class JobManager(QObject):
         ejectable_sources = report_data.get('ejectable_sources_on_success', [])
         if ejectable_sources:
             self.ejection_requested.emit(ejectable_sources)
+        self.job_record_changed.emit()
+
+    def _log_finished(self, report):
+        took = ""
+        if report.get('start_time') and report.get('end_time'):
+            took = f" in {str(report['end_time'] - report['start_time']).split('.')[0]}"
+        if 'mhl_file' in report:
+            log.info("[%s] MHL check finished: %s. %s verified, %s failed, %s missing%s", report['job_id'], report['status'],
+                     report['verified_count'], report['failed_count'], report['missing_count'], took)
+            return
+        files = report.get('files', [])
+        good = sum(1 for f in files if f.get('status') in ('Verified', 'Copied (Unverified)'))
+        level = log.info if report['status'] in ('Completed', 'Cancelled') else log.error
+        level("[%s] Copy finished: %s. %s of %s files good, %s bytes, %s problem(s)%s", report['job_id'], report['status'],
+              good, len(files), report.get('total_size', 0), len(report.get('errors', [])), took)
+        for m in report.get('manifests', []):
+            if m.get('path'):
+                log.info("[%s] Manifest written: %s (%s files)", report['job_id'], m['path'], m['files'])
 
     def queue_finished(self):
         was_running = self.is_running
         self.is_running = False
         self.is_paused = False
+        self.keep_awake.stop()
         self.queue_state_changed.emit(self.is_running, self.job_queue)
         # Sent after the state change, so the result stays on screen instead of
         # being reset to "idle" straight away.
@@ -393,4 +443,5 @@ class JobManager(QObject):
                 job['status'] = 'Processed'
                 break
         self.job_list_changed.emit()
+        self.job_record_changed.emit()
         self._start_post_processing_if_needed()

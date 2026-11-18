@@ -13,6 +13,9 @@ The application provides a graphical user interface for:
     *   Never overwriting: a file already at the destination is checked against the source, not replaced
     *   No half-written files: a file is named `<name>.slate-partial` until it passes its check
     *   Ejecting drives on completion (only offered when every file was verified)
+    *   Free-space check: a destination that cannot hold the copy is caught while the card is being scanned
+    *   Keeping the Mac awake while a copy runs (`keep_awake.py`, uses `caffeinate`)
+*   **Log file:** `~/DIT_Projects/logs/slate.log` records every job and every problem (File > Show Log File).
 *   **Proof of copy:** An ASC MHL manifest (`ascmhl/` folder) is written automatically at the top of each copied card on every destination, using the ASC reference library.
 *   **Reporting:** Generating transfer reports in PDF format, including contact sheets. A legacy MHL (v1.1) export is also available.
 *   **Post-Processing:** Running post-transfer tasks, likely involving `ffmpeg` and `ffprobe` for media file analysis and thumbnail generation.
@@ -68,6 +71,8 @@ There is also evidence of PyInstaller usage (`hook-PySide6.py`), which suggests 
     *   `job_manager.py`: Core logic for managing transfer jobs.
     *   `copy_engine.py`: Copies one file to every destination and verifies it. No Qt, so it can be tested and timed alone.
     *   `manifest.py`: Writes the ASC MHL manifest beside each copy.
+    *   `app_log.py`: The log file.
+    *   `keep_awake.py`: Stops the Mac sleeping during a copy.
     *   `workers.py`: Worker classes for performing background tasks.
     *   `ui_components.py`: Reusable UI components.
     *   `utils.py`: Utility functions.

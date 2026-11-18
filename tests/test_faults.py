@@ -36,7 +36,7 @@ class FaultyFile:
     def write(self, buf):
         if self.fail_after is not None and self.written + len(buf) > self.fail_after:
             raise OSError(self.error_code, os.strerror(self.error_code))
-        if self.corrupt and self.written <= SMALL_CHUNK < self.written + len(buf):
+        if self.corrupt and self.written == 0 and len(buf) > 10:
             damaged = bytearray(buf)
             damaged[10] ^= 0x01  # one flipped bit, as a bad cable or drive would do
             buf = bytes(damaged)
@@ -54,6 +54,11 @@ class FaultyFile:
 
 
 class FaultyTestCase(unittest.TestCase):
+    # Large enough to be copied in several chunks, by one thread per drive.
+    # The "SmallFiles" classes at the bottom rerun the same tests with files
+    # that fit in one chunk, which Slate copies on a single thread.
+    file_size = FILE_SIZE
+
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
         self.card = os.path.join(self.tmp, "A001")
@@ -66,7 +71,7 @@ class FaultyTestCase(unittest.TestCase):
         for name in ("C001.mov", "C002.mov"):
             path = os.path.join(self.card, "CLIPS", name)
             with open(path, "wb") as f:
-                f.write(os.urandom(FILE_SIZE))
+                f.write(os.urandom(self.file_size))
             self.clips.append(path)
         chunk = patch.object(copy_engine, "CHUNK_SIZE", SMALL_CHUNK)
         chunk.start()
@@ -97,6 +102,7 @@ class FaultyTestCase(unittest.TestCase):
             "naming_preset": {}, "card_counter": 1,
         }
         scanner = ScanWorker(params, job["file_queue"])
+        scanner.job = job
         scanner.scan_progress = MagicMock()
         scanner.scan_finished = MagicMock()
         scanner.run()
@@ -185,7 +191,7 @@ class TestDamagedCopies(FaultyTestCase):
             self.assertIn("checksum mismatch", b["status"])
 
     def test_drive_full(self):
-        self.break_drive(self.drive_b, fail_after=3 * SMALL_CHUNK, error_code=errno.ENOSPC)
+        self.break_drive(self.drive_b, fail_after=self.file_size // 3, error_code=errno.ENOSPC)
         report = self.run_job()
         self.assertJobFailed(report)
         self.assertIn("No space left", " ".join(report["errors"]))
@@ -194,7 +200,7 @@ class TestDamagedCopies(FaultyTestCase):
         self.assertDriveClean(self.drive_a)
 
     def test_drive_unplugged_mid_file(self):
-        self.break_drive(self.drive_a, fail_after=5 * SMALL_CHUNK, error_code=errno.EIO)
+        self.break_drive(self.drive_a, fail_after=self.file_size // 2, error_code=errno.EIO)
         report = self.run_job()
         self.assertJobFailed(report)
         self.assertEqual(self.all_files(self.drive_a), [])
@@ -209,6 +215,7 @@ class TestDamagedCopies(FaultyTestCase):
 
     def test_card_unplugged_mid_file(self):
         real_open = copy_engine._open_source
+        good_reads = 3 if self.file_size > SMALL_CHUNK else 0
 
         class DyingCard:
             def __init__(self, f):
@@ -216,7 +223,7 @@ class TestDamagedCopies(FaultyTestCase):
 
             def read(self, n):
                 self.reads += 1
-                if self.reads > 3:
+                if self.reads > good_reads:
                     raise OSError(errno.EIO, os.strerror(errno.EIO))
                 return self.f.read(n)
 
@@ -274,7 +281,7 @@ class TestFilesAlreadyThere(FaultyTestCase):
         existing = self.dest(self.drive_a, self.clips[0])
         os.makedirs(os.path.dirname(existing))
         with open(existing, "wb") as f:
-            f.write(os.urandom(FILE_SIZE))
+            f.write(os.urandom(self.file_size))
         report = self.run_job()
         self.assertJobFailed(report)
 
@@ -336,6 +343,82 @@ class TestEject(FaultyTestCase):
         with patch("workers.os.path.ismount", lambda p: True):
             bad = self.run_job(self.make_job(eject_on_completion=True))
         self.assertNotIn("ejectable_sources_on_success", bad)
+
+
+class TestDamagedCopiesSmallFiles(TestDamagedCopies):
+    file_size = 5000
+
+
+class TestCancelSmallFiles(TestCancel):
+    file_size = 5000
+
+
+class TestFilesAlreadyThereSmallFiles(TestFilesAlreadyThere):
+    file_size = 5000
+
+
+class TestEmptyFiles(FaultyTestCase):
+    file_size = 0
+
+    def test_empty_files_are_copied_and_verified(self):
+        report = self.run_job()
+        self.assertEqual(report["status"], "Completed")
+        for clip in self.clips:
+            self.assertEqual(os.path.getsize(self.dest(self.drive_b, clip)), 0)
+
+
+class TestFreeSpace(FaultyTestCase):
+    def with_free_space(self, free_bytes):
+        usage = MagicMock(free=free_bytes)
+        p = patch("workers.shutil.disk_usage", lambda path: usage)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_drive_too_small_is_caught_before_anything_is_copied(self):
+        self.with_free_space(self.file_size + 10)  # room for one clip, the card has two
+        with self.assertLogs("slate", level="ERROR") as logged:
+            report = self.run_job()
+        self.assertJobFailed(report)
+        self.assertIn("Not enough free space", report["errors"][0])
+        self.assertIn("Not enough free space", "\n".join(logged.output))
+        self.assertEqual(self.all_files(self.drive_a) + self.all_files(self.drive_b), [])
+
+    def test_enough_space_is_not_flagged(self):
+        self.with_free_space(10 * self.file_size)
+        self.assertEqual(self.run_job()["status"], "Completed")
+
+    def test_files_already_copied_do_not_count_against_free_space(self):
+        self.run_job()
+        self.with_free_space(10)  # drive is now "full", but nothing new needs writing
+        self.assertEqual(self.run_job()["status"], "Completed")
+
+    def test_stop_part_way_keeps_verified_files_and_discards_the_rest(self):
+        job = self.make_job()
+
+        def run_out_of_space_on_second_clip(worker):
+            seen = []
+
+            def on_file_progress(percent, text, path, speed):
+                if path not in seen:
+                    seen.append(path)
+                if len(seen) == 2 and percent >= 30:
+                    job["abort_reason"] = "Not enough free space on 'DriveB'."
+            worker.file_progress.emit.side_effect = on_file_progress
+
+        report = self.run_job(job, before_run=run_out_of_space_on_second_clip)
+        self.assertJobFailed(report)
+        self.assertEqual(len(self.all_files(self.drive_a)), 1)
+        self.assertDriveClean(self.drive_a)
+        self.assertDriveClean(self.drive_b)
+        self.assertEqual(len(report["manifests"]), 2)  # the clip that made it is still vouched for
+
+
+class TestProblemsAreLogged(FaultyTestCase):
+    def test_a_bad_copy_is_written_to_the_log(self):
+        self.break_drive(self.drive_b, corrupt=True)
+        with self.assertLogs("slate", level="ERROR") as logged:
+            self.run_job()
+        self.assertIn("NOT copied safely", "\n".join(logged.output))
 
 
 class TestFolderChoices(unittest.TestCase):

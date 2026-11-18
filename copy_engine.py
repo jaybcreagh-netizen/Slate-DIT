@@ -152,25 +152,17 @@ class _DestWriter(threading.Thread):
         self.chunks = queue.Queue(maxsize=_QUEUE_DEPTH)
         self.error = None
 
-    def run(self):
+    def _write(self, chunks):
         f = None
-        finished = False
         try:
             os.makedirs(os.path.dirname(self.final_path) or ".", exist_ok=True)
             f = _open_dest(self.tmp_path)
-            while True:
-                buf = self.chunks.get()
-                if buf is None:
-                    finished = True
-                    break
+            for buf in chunks:
                 f.write(buf)
             f.flush()
             os.fsync(f.fileno())
         except BaseException as e:  # noqa: BLE001 - reported to the caller, never swallowed
             self.error = e
-            # Keep taking chunks so the reader is never left waiting on us.
-            while not finished:
-                finished = self.chunks.get() is None
         finally:
             if f is not None:
                 try:
@@ -178,6 +170,27 @@ class _DestWriter(threading.Thread):
                 except OSError as e:
                     if self.error is None:
                         self.error = e
+
+    def _from_queue(self):
+        while True:
+            buf = self.chunks.get()
+            if buf is None:
+                self._ended = True
+                return
+            yield buf
+
+    def run(self):
+        """Large files: take chunks from the reader as they arrive."""
+        self._ended = False
+        self._write(self._from_queue())
+        # After an error, keep taking chunks so the reader is never left waiting on us.
+        while not self._ended:
+            self._ended = self.chunks.get() is None
+
+    def write_now(self, chunks):
+        """Small files: write on the calling thread. Starting a thread per
+        file costs more than the write itself when there are thousands."""
+        self._write(iter(chunks))
 
 
 def copy_file(src, dest_paths, method, mode="full", control=None, on_progress=None):
@@ -210,9 +223,13 @@ def copy_file(src, dest_paths, method, mode="full", control=None, on_progress=No
     need_source_hash = mode == "full" and bool(same_size_existing)
     bytes_read = 0
     read_complete = False
+    # A file that fits in one chunk is handled on this thread, start to finish.
+    threaded = src_size > CHUNK_SIZE
+    held = []
 
-    for w in writers.values():
-        w.start()
+    if threaded:
+        for w in writers.values():
+            w.start()
     try:
         try:
             if writers or need_source_hash:
@@ -225,11 +242,14 @@ def copy_file(src, dest_paths, method, mode="full", control=None, on_progress=No
                             break
                         if hasher:
                             hasher.update(buf)
-                        any_alive = False
-                        for w in writers.values():
-                            if w.error is None:
-                                w.chunks.put(buf)
-                                any_alive = True
+                        any_alive = not threaded
+                        if threaded:
+                            for w in writers.values():
+                                if w.error is None:
+                                    w.chunks.put(buf)
+                                    any_alive = True
+                        else:
+                            held.append(buf)
                         bytes_read += len(buf)
                         if on_progress:
                             on_progress(bytes_read, src_size)
@@ -239,10 +259,14 @@ def copy_file(src, dest_paths, method, mode="full", control=None, on_progress=No
                 bytes_read = src_size
                 read_complete = True
         finally:
+            if threaded:
+                for w in writers.values():
+                    w.chunks.put(None)
+                for w in writers.values():
+                    w.join()
+        if not threaded:
             for w in writers.values():
-                w.chunks.put(None)
-            for w in writers.values():
-                w.join()
+                w.write_now(held)
     except BaseException:
         for w in writers.values():
             _remove_quietly(w.tmp_path)
@@ -301,12 +325,18 @@ def copy_file(src, dest_paths, method, mode="full", control=None, on_progress=No
         except OSError as e:
             result['status'] = f"Could not read the existing file: {_describe(e)}"
 
-    jobs = [threading.Thread(target=finish_written, args=(i, w), daemon=True) for i, w in writers.items()]
-    jobs += [threading.Thread(target=check_existing, args=(i,), daemon=True) for i in existing]
-    for t in jobs:
-        t.start()
-    for t in jobs:
-        t.join()
+    if threaded:
+        jobs = [threading.Thread(target=finish_written, args=(i, w), daemon=True) for i, w in writers.items()]
+        jobs += [threading.Thread(target=check_existing, args=(i,), daemon=True) for i in existing]
+        for t in jobs:
+            t.start()
+        for t in jobs:
+            t.join()
+    else:
+        for i, w in writers.items():
+            finish_written(i, w)
+        for i in existing:
+            check_existing(i)
     if cancelled:
         raise cancelled[0]
 
