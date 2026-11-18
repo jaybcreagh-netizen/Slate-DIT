@@ -1,5 +1,5 @@
 import unittest
-from utils import format_bytes, format_eta, resolve_path_template
+from utils import format_bytes, format_eta, resolve_path_template, job_status_style
 
 class TestUtils(unittest.TestCase):
     def test_format_bytes(self):
@@ -19,6 +19,12 @@ class TestUtils(unittest.TestCase):
         tokens = {"project_name": "MyProject", "camera_id": "A"}
         result = resolve_path_template(template, tokens, 1, "ignored")
         self.assertEqual(result, "MyProject/A/001")
+
+    def test_only_a_clean_job_is_drawn_green(self):
+        green = job_status_style("Completed")[0]
+        self.assertEqual(job_status_style("Processed")[0], green)
+        for status in ("Completed with errors", "Completed with issues", "Failed", "Something unexpected"):
+            self.assertNotEqual(job_status_style(status)[0], green, status)
 
 if __name__ == '__main__':
     unittest.main()

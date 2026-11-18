@@ -171,3 +171,6 @@ QProgressBar::chunk {
 QProgressBar[complete="true"]::chunk { 
     background-color: #4CAF50; 
 }
+QProgressBar[problem="true"]::chunk { 
+    background-color: #F44336; 
+}

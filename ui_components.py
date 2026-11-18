@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QSpinBox, QGraphicsOpacityEffect, QSizePolicy
 )
 
-from utils import get_icon, get_icon_for_path, format_bytes, resolve_path_template
+from utils import get_icon, get_icon_for_path, format_bytes, resolve_path_template, job_status_style
 
 class ToggleSwitch(QWidget):
     toggled = Signal(bool)
@@ -194,7 +194,7 @@ class JobListItem(QWidget):
         main_layout.addWidget(self.remove_button)
         self.update_status(job_data)
     def enterEvent(self, event):
-        if self.job_data.get('status') in ['Queued', 'Completed', 'Cancelled', 'Processed', 'Completed with errors']:
+        if self.job_data.get('status') not in ['Running', 'Scanning', 'Post-processing']:
              self.remove_button.show()
         super().enterEvent(event)
     def leaveEvent(self, event):
@@ -224,14 +224,21 @@ class JobListItem(QWidget):
                 tooltip_text += "<br><br><b>Sources:</b><ul>" + "".join(f"<li>{s}</li>" for s in sources) + "</ul>"
             if dests:
                 tooltip_text += "<b>Destinations:</b><ul>" + "".join(f"<li>{d}</li>" for d in dests) + "</ul>"
+        report = job_data.get('report') or {}
+        problems = report.get('errors') or []
+        if problems:
+            item_text += f" &nbsp;<span style='color:#F44336'>{len(problems)} problem(s)</span>"
+            shown = "".join(f"<li>{p}</li>" for p in problems[:5])
+            more = f"<li>...and {len(problems) - 5} more</li>" if len(problems) > 5 else ""
+            tooltip_text += f"<br><b>Problems:</b><ul>{shown}{more}</ul>"
+        manifests = [m['path'] for m in report.get('manifests', []) if m.get('path')]
+        if manifests:
+            tooltip_text += "<b>Manifests written:</b><ul>" + "".join(f"<li>{m}</li>" for m in manifests) + "</ul>"
         fm = self.job_label.fontMetrics()
         elided_text = fm.elidedText(item_text, Qt.ElideRight, self.job_label.width())
         self.job_label.setText(elided_text)
         self.setToolTip(tooltip_text)
-        colors = {"Processed": "#4CAF50", "Completed": "#4CAF50", "Post-processing": "#9C27B0", "Running": "#00BCD4", "Cancelled": "#FF9800", "Queued": "gray", "Completed with errors": "#FF9800"}
-        icon_color = next((colors[s] for s in colors if s in status), "#F44336")
-        icons = { "Processed": ("checkmark.seal.fill", "fa5s.check-double"), "Post-processing": ("film.fill", "fa5s.film"), "Completed": ("checkmark.circle.fill", "fa5s.check-circle"), "Running": ("gearshape.2.fill", "fa5s.cogs"), "Cancelled": ("xmark.octagon.fill", "fa5s.ban"), "Queued": ("clock.fill", "fa5s.clock"), "Completed with errors": ("exclamationmark.triangle.fill", "fa5s.exclamation-triangle")}
-        sfs_name, fa_name = icons.get(next((s for s in icons if s in status), "default"), ("exclamationmark.triangle.fill", "fa5s.exclamation-circle"))
+        icon_color, sfs_name, fa_name = job_status_style(status)
         icon = get_icon(sfs_name, fa_name, color=icon_color)
         self.status_icon.setPixmap(icon.pixmap(QSize(18, 18)))
         if sys.platform == "darwin":
@@ -375,12 +382,14 @@ class AnimatedPathListWidget(PathListWidget):
         self.setItemWidget(item, widget)
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
-        self.anim_in = QPropertyAnimation(effect, b"opacity")
-        self.anim_in.setDuration(300)
-        self.anim_in.setStartValue(0.0)
-        self.anim_in.setEndValue(1.0)
-        self.anim_in.setEasingCurve(QEasingCurve.InOutQuad)
-        self.anim_in.start(QPropertyAnimation.DeleteWhenStopped)
+        # Each row owns its own fade-in. Sharing one animation between rows left
+        # earlier rows invisible when several paths were added at once.
+        anim_in = QPropertyAnimation(effect, b"opacity", widget)
+        anim_in.setDuration(300)
+        anim_in.setStartValue(0.0)
+        anim_in.setEndValue(1.0)
+        anim_in.setEasingCurve(QEasingCurve.InOutQuad)
+        anim_in.start(QPropertyAnimation.DeleteWhenStopped)
     def remove_path(self, path_to_remove):
         for i in range(self.count()):
             item = self.item(i)
@@ -397,13 +406,13 @@ class AnimatedPathListWidget(PathListWidget):
                 if not effect:
                     effect = QGraphicsOpacityEffect(widget)
                     widget.setGraphicsEffect(effect)
-                self.anim_out = QPropertyAnimation(effect, b"opacity")
-                self.anim_out.setDuration(250)
-                self.anim_out.setStartValue(1.0)
-                self.anim_out.setEndValue(0.0)
-                self.anim_out.setEasingCurve(QEasingCurve.InOutQuad)
-                self.anim_out.finished.connect(lambda p=path_to_remove: self.remove_path(p))
-                self.anim_out.start(QPropertyAnimation.DeleteWhenStopped)
+                anim_out = QPropertyAnimation(effect, b"opacity", widget)
+                anim_out.setDuration(250)
+                anim_out.setStartValue(1.0)
+                anim_out.setEndValue(0.0)
+                anim_out.setEasingCurve(QEasingCurve.InOutQuad)
+                anim_out.finished.connect(lambda p=path_to_remove: self.remove_path(p))
+                anim_out.start(QPropertyAnimation.DeleteWhenStopped)
                 break
 
 class DropFrame(QFrame):

@@ -7,6 +7,7 @@ from collections import deque
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox
 
+from copy_engine import find_path_conflict
 from workers import TransferWorker, PostProcessWorker, MHLVerifyWorker, ScanWorker
 
 class JobManager(QObject):
@@ -20,6 +21,7 @@ class JobManager(QObject):
     ejection_requested = Signal(list)
     play_sound = Signal(str)
     mhl_verify_report_ready = Signal(dict)
+    copy_problems_found = Signal(dict)
 
     def __init__(self, window):
         super().__init__()
@@ -56,6 +58,11 @@ class JobManager(QObject):
             QMessageBox.warning(self.window, "Missing Paths", "Please add at least one source and one destination.")
             return
 
+        conflict = find_path_conflict(sources, destinations)
+        if conflict:
+            QMessageBox.warning(self.window, "Check Your Folders", conflict + " Please choose a different destination.")
+            return
+
         file_queue = queue.Queue()
         job_id = f"Job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.get_all_jobs()) + 1}"
 
@@ -68,8 +75,6 @@ class JobManager(QObject):
             "create_source_folder": self.window.create_source_folder_checkbox.isChecked(),
             "checksum_method": self.window.checksum_combo.currentText(),
             "eject_on_completion": self.window.eject_checkbox.isChecked(),
-            "skip_existing": self.window.skip_existing_checkbox.isChecked(),
-            "resume_partial": self.window.resume_checkbox.isChecked(),
             "metadata": self.window.source_metadata,
             "verification_mode": self.window.global_settings.get("verification_mode", "full"),
             "defer_post_process": self.window.global_settings.get("defer_post_process", False)
@@ -84,8 +89,7 @@ class JobManager(QObject):
             "checksum_method": job_params['checksum_method'],
             "status": "Scanning",
             "eject_on_completion": job_params['eject_on_completion'],
-            "skip_existing": job_params['skip_existing'],
-            "resume_partial": job_params['resume_partial'],
+            "author": self.window.global_settings.get("dit_name") or None,
             "metadata": job_params['metadata'],
             "verification_mode": job_params['verification_mode'],
             "defer_post_process": job_params['defer_post_process'],
@@ -324,9 +328,11 @@ class JobManager(QObject):
         finished_worker_job['report'] = report_data
 
         status_lower = report_data.get('status', '').lower()
-        if 'error' in status_lower or 'failed' in status_lower:
+        if 'error' in status_lower or 'failed' in status_lower or 'issues' in status_lower:
             self.current_queue_had_errors = True
             self.play_sound.emit("error")
+            if finished_worker_job.get("job_type", "copy") == "copy":
+                self.copy_problems_found.emit(report_data)
         elif not self.window.global_settings.get("defer_post_process", False) and finished_worker_job.get("job_type", "copy") == "copy":
             self.post_process_queue.append(finished_worker_job)
             self._start_post_processing_if_needed()
@@ -338,16 +344,19 @@ class JobManager(QObject):
             self.ejection_requested.emit(ejectable_sources)
 
     def queue_finished(self):
-        if self.is_running:
-             if not self.current_queue_had_errors:
-                self.play_sound.emit("success")
-                self.overall_progress_updated.emit(100, "Queue completed", 0.0, 0)
-             else:
-                self.overall_progress_updated.emit(100, "Queue completed with errors", 0.0, 0)
+        was_running = self.is_running
         self.is_running = False
         self.is_paused = False
         self.queue_state_changed.emit(self.is_running, self.job_queue)
-        
+        # Sent after the state change, so the result stays on screen instead of
+        # being reset to "idle" straight away.
+        if was_running:
+            if not self.current_queue_had_errors:
+                self.play_sound.emit("success")
+                self.overall_progress_updated.emit(100, "Queue completed", 0.0, 0)
+            else:
+                self.overall_progress_updated.emit(100, "Queue completed with errors", 0.0, 0)
+
     def run_post_process_for_job(self, job_data):
         if job_data:
             self.post_process_queue.append(job_data)

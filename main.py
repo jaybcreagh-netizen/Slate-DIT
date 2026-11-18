@@ -162,16 +162,6 @@ class MainWindow(QMainWindow):
         self.eject_checkbox = ToggleSwitch()
         options_grid_layout.addWidget(self.eject_checkbox)
         options_grid_layout.addWidget(QLabel("Eject on completion"))
-        options_grid_layout.addSpacing(10)
-        self.skip_existing_checkbox = ToggleSwitch()
-        self.skip_existing_checkbox.setChecked(True)
-        options_grid_layout.addWidget(self.skip_existing_checkbox)
-        options_grid_layout.addWidget(QLabel("Skip existing"))
-        options_grid_layout.addSpacing(10)
-        self.resume_checkbox = ToggleSwitch()
-        self.resume_checkbox.setChecked(True)
-        options_grid_layout.addWidget(self.resume_checkbox)
-        options_grid_layout.addWidget(QLabel("Resume partial"))
         options_main_layout.addLayout(options_grid_layout)
 
         bottom_layout.addWidget(options_frame)
@@ -206,14 +196,17 @@ class MainWindow(QMainWindow):
         self.toolbar.setMovable(False)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.toolbar)
 
-        self.add_to_queue_button = QPushButton(get_icon("plus", "fa5s.plus", color="white"), " Add Job")
+        self.add_to_queue_button = QPushButton(get_icon("play.fill", "fa5s.play", color="white"), " Copy && Verify")
         self.add_to_queue_button.setObjectName("PrimaryButton")
         self.start_queue_button = QPushButton(get_icon("play.fill", "fa5s.play", color="white"), " Start Queue")
         self.start_queue_button.setObjectName("PrimaryButton")
         self.cancel_button = QPushButton(get_icon("stop.fill", "fa5s.stop", color="white"), " Cancel")
         self.toolbar.addWidget(self.add_to_queue_button)
-        self.toolbar.addWidget(self.start_queue_button)
-        self.toolbar.addWidget(self.cancel_button)
+        # Widgets in a toolbar are shown and hidden through their toolbar action.
+        self.start_queue_action = self.toolbar.addWidget(self.start_queue_button)
+        self.cancel_action = self.toolbar.addWidget(self.cancel_button)
+        self.start_queue_action.setVisible(False)
+        self.cancel_action.setVisible(False)
         
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -311,6 +304,7 @@ class MainWindow(QMainWindow):
         self.job_manager.ejection_requested.connect(self._show_ejection_dialog)
         self.job_manager.play_sound.connect(self.play_sound)
         self.job_manager.mhl_verify_report_ready.connect(self.show_mhl_verify_report)
+        self.job_manager.copy_problems_found.connect(self.show_copy_problems)
         
         self.add_to_queue_button.clicked.connect(self.job_manager.create_job_from_ui)
         self.start_queue_button.clicked.connect(self.job_manager.start_or_pause_queue)
@@ -321,8 +315,9 @@ class MainWindow(QMainWindow):
 
     def on_queue_state_changed(self, is_running, job_queue):
         self._set_controls_enabled(not is_running)
-        self.cancel_button.setVisible(is_running)
+        self.cancel_action.setVisible(is_running)
         self.start_queue_button.setEnabled(bool(job_queue) or is_running)
+        self.start_queue_action.setVisible(bool(job_queue) or is_running)
         if is_running:
             if self.job_manager.is_paused:
                 self.start_queue_button.setText(" Resume")
@@ -339,12 +334,17 @@ class MainWindow(QMainWindow):
     def update_overall_progress(self, percent, text, speed_mbps, eta_seconds):
         self.overall_progress_bar.setValue(percent)
         
-        is_complete = (percent == 100 and text.lower().startswith("queue complet"))
-        self.overall_progress_bar.setProperty("complete", is_complete)
+        is_finished = (percent == 100 and text.lower().startswith("queue complet"))
+        has_problem = is_finished and "error" in text.lower()
+        self.overall_progress_bar.setProperty("complete", is_finished and not has_problem)
+        self.overall_progress_bar.setProperty("problem", has_problem)
         self.overall_progress_bar.style().polish(self.overall_progress_bar)
 
-        if is_complete:
-            self.overall_progress_bar.setFormat(text)
+        if has_problem:
+            self.overall_progress_bar.setFormat("Finished with problems")
+            self.file_progress_label.setText("Not everything was copied safely")
+        elif is_finished:
+            self.overall_progress_bar.setFormat("All copies verified" if self.global_settings.get("verification_mode", "full") != "none" else "Copied (not verified)")
             self.file_progress_label.setText("Complete")
         else:
             speed_text = f"{speed_mbps:.2f} MB/s"
@@ -413,8 +413,6 @@ class MainWindow(QMainWindow):
         self.add_to_queue_button.setEnabled(enabled)
         self.start_queue_button.setEnabled(enabled and (bool(self.job_manager.job_queue) or bool(self.job_manager.active_workers)))
         self.eject_checkbox.setEnabled(enabled)
-        self.skip_existing_checkbox.setEnabled(enabled)
-        self.resume_checkbox.setEnabled(enabled)
         self.update_folder_creation_mode()
         self.load_template_action.setEnabled(enabled and is_project_loaded)
         self.save_template_action.setEnabled(enabled and is_project_loaded)
@@ -609,7 +607,10 @@ class MainWindow(QMainWindow):
             menu.addMenu(reports_submenu)
             
             if job_data.get("job_type") != "mhl_verify":
-                menu.addAction("Save MHL Manifest...", lambda: self.report_manager.save_mhl_manifest(job_data['report']))
+                manifests = [m['path'] for m in job_data['report'].get('manifests', []) if m.get('path')]
+                if manifests:
+                    menu.addAction("Show Manifest in Folder", lambda: self.source_frame.path_list.open_in_explorer(os.path.dirname(manifests[0])))
+                menu.addAction("Export Legacy MHL...", lambda: self.report_manager.save_mhl_manifest(job_data['report']))
                 menu.addAction("Save CSV Log...", lambda: self.report_manager.save_csv_log(job_data['report']))
             menu.addSeparator()
         if job_data.get('status') == 'Completed' and job_data.get("job_type") != "mhl_verify":
@@ -623,6 +624,22 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             for path in sources:
                 self.on_eject_requested(path)
+
+    def show_copy_problems(self, report_data):
+        problems = report_data.get('errors', [])
+        msg_box = QMessageBox(self)
+        msg_box.setWindowTitle("Copy Finished With Problems")
+        msg_box.setIcon(QMessageBox.Warning)
+        msg_box.setText(f"{len(problems)} problem(s) in this copy. Do not wipe the card.")
+        msg_box.setInformativeText("Files that passed are safe and listed in the manifest. "
+                                   "Fix the cause, then run the copy again: files already copied are checked, not copied twice.")
+        text_edit = QTextEdit()
+        text_edit.setPlainText("\n\n".join(problems))
+        text_edit.setReadOnly(True)
+        text_edit.setMinimumHeight(150)
+        grid_layout = msg_box.layout()
+        grid_layout.addWidget(text_edit, grid_layout.rowCount(), 0, 1, grid_layout.columnCount())
+        msg_box.exec()
 
     def show_mhl_verify_report(self, report_data):
         msg_box = QMessageBox(self)
@@ -777,13 +794,33 @@ class MainWindow(QMainWindow):
         job_id = f"Job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{len(self.job_manager.get_all_jobs()) + 1}"
         job = {"id": job_id, "job_type": "mhl_verify", "mhl_file": mhl_path, "target_dir": target_dir, "status": "Queued"}
         self.job_manager.add_job_to_queue(job)
+        if not self.job_manager.is_running:
+            self.job_manager.start_or_pause_queue()
+
+    def load_job_template(self):
+        file_path, _ = QFileDialog.getOpenFileName(self, "Load Job Template", "", "DIT Templates (*.dittemplate)")
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'r') as f:
+                template_data = json.load(f)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load template: {e}")
+            return
+        self.dest_frame.path_list.clear()
+        for path in template_data.get("destinations", []):
+            self.dest_frame.path_list.add_path(path)
+        self.checksum_combo.setCurrentText(template_data.get("checksum_method", "xxHash (Fast)"))
+        self.create_source_folder_checkbox.setChecked(template_data.get("create_source_folder", True))
+        self.eject_checkbox.setChecked(template_data.get("eject_on_completion", False))
+        self.update_folder_creation_mode()
 
     def save_job_template(self):
         default_name = f"{os.path.basename(self.project_path or 'Untitled')}_Template.dittemplate"
         file_path, _ = QFileDialog.getSaveFileName(self, "Save Job Template", default_name, "DIT Templates (*.dittemplate)")
         if not file_path:
             return
-        template_data = { "destinations": self.dest_frame.path_list.get_all_paths(), "checksum_method": self.checksum_combo.currentText(), "create_source_folder": self.create_source_folder_checkbox.isChecked(), "eject_on_completion": self.eject_checkbox.isChecked(), "skip_existing": self.skip_existing_checkbox.isChecked(), "resume_partial": self.resume_checkbox.isChecked() }
+        template_data = { "destinations": self.dest_frame.path_list.get_all_paths(), "checksum_method": self.checksum_combo.currentText(), "create_source_folder": self.create_source_folder_checkbox.isChecked(), "eject_on_completion": self.eject_checkbox.isChecked() }
         try:
             with open(file_path, 'w') as f:
                 json.dump(template_data, f, indent=2)

@@ -62,3 +62,22 @@ def resolve_path_template(template, user_tokens, card_num, source_name):
     path = path.replace("{card_num}", f"{card_num:03d}")
     path = path.replace("{source_name}", source_name)
     return path
+
+# Colour and icon for each job status. Matched on the exact status, so
+# "Completed with errors" can never be drawn as a plain green "Completed".
+_OK, _WARN, _BAD = "#4CAF50", "#FF9800", "#F44336"
+_JOB_STATUS_STYLES = {
+    "Processed": (_OK, "checkmark.seal.fill", "fa5s.check-double"),
+    "Completed": (_OK, "checkmark.circle.fill", "fa5s.check-circle"),
+    "Post-processing": ("#9C27B0", "film.fill", "fa5s.film"),
+    "Running": ("#00BCD4", "gearshape.2.fill", "fa5s.cogs"),
+    "Scanning": ("#00BCD4", "gearshape.2.fill", "fa5s.cogs"),
+    "Queued": ("gray", "clock.fill", "fa5s.clock"),
+    "Cancelled": (_WARN, "xmark.octagon.fill", "fa5s.ban"),
+}
+_PROBLEM_STYLE = (_BAD, "exclamationmark.triangle.fill", "fa5s.exclamation-triangle")
+
+def job_status_style(status):
+    """Returns (colour, SF Symbol name, Font Awesome name) for a job status.
+    Anything that is not a known good or in-progress state is shown as a problem."""
+    return _JOB_STATUS_STYLES.get(status, _PROBLEM_STYLE)

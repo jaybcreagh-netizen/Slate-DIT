@@ -1,15 +1,13 @@
 # workers.py
 import os
-import shutil
 import time
 import json
 import platform
 import subprocess
 import xxhash
-import hashlib
-import queue
 from xml.etree import ElementTree as ET
 from datetime import datetime
+from fractions import Fraction
 
 import cv2
 import psutil
@@ -19,10 +17,11 @@ from PySide6.QtCore import QThread, Signal
 from PIL import Image as PILImage
 import rawpy
 
-from config import FFMPEG_PATH, FFPROBE_PATH
+import copy_engine
+import manifest
+from config import APP_NAME, APP_VERSION, FFMPEG_PATH, FFPROBE_PATH
 from utils import check_command, resolve_path_template
 
-# --- ScanWorker, EjectWorker, PostProcessWorker are unchanged ---
 class ScanWorker(QThread):
     scan_finished = Signal(dict)
     scan_progress = Signal(int, int) # files_found, current_total_size
@@ -31,6 +30,25 @@ class ScanWorker(QThread):
         super().__init__(parent)
         self.job_params = job_params
         self.file_queue = file_queue
+
+    def _dest_root(self, dest_root, source_path):
+        """The folder at this destination that will hold this source's files."""
+        source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
+        if self.job_params['has_template']:
+            return os.path.join(dest_root, resolve_path_template(
+                self.job_params['naming_preset']['template'],
+                self.job_params['naming_preset'],
+                self.job_params['card_counter'],
+                source_folder_name
+            ))
+        if self.job_params['create_source_folder']:
+            return os.path.join(dest_root, source_folder_name)
+        return dest_root
+
+    def _report_problem(self, message):
+        # Anything the scan could not read is passed to the copy as a problem,
+        # so the job cannot finish green with files missing.
+        self.file_queue.put({'scan_error': message})
 
     def run(self):
         sources = self.job_params['sources']
@@ -42,42 +60,34 @@ class ScanWorker(QThread):
 
         try:
             for source_path in sources:
-                for root, _, files in os.walk(source_path):
+                # Worked out once per source, so a copy that runs past midnight
+                # does not split one card across two dated folders.
+                dest_roots = [self._dest_root(d, source_path) for d in destinations]
+
+                def on_walk_error(error, source_path=source_path):
+                    self._report_problem(f"Could not read '{error.filename or source_path}': {error.strerror or error}")
+
+                for root, _, files in os.walk(source_path, onerror=on_walk_error):
                     for file in files:
                         full_path = os.path.join(root, file)
-                        all_source_files[full_path] = source_path
                         try:
                             file_size = os.path.getsize(full_path)
-                            total_size += file_size
-                        except FileNotFoundError:
+                        except OSError as e:
+                            self._report_problem(f"Could not read '{full_path}': {e.strerror or e}")
                             continue
+                        all_source_files[full_path] = source_path
+                        total_size += file_size
 
                         files_found += 1
-                        file_dests = []
                         relative_path = os.path.relpath(full_path, source_path)
-
-                        for dest_root in destinations:
-                            final_dest_root = dest_root
-                            if self.job_params['has_template']:
-                                source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
-                                resolved_template_path = resolve_path_template(
-                                    self.job_params['naming_preset']['template'],
-                                    self.job_params['naming_preset'],
-                                    self.job_params['card_counter'],
-                                    source_folder_name
-                                )
-                                final_dest_root = os.path.join(dest_root, resolved_template_path)
-                            elif self.job_params['create_source_folder']:
-                                source_folder_name = os.path.basename(source_path.rstrip(os.path.sep))
-                                final_dest_root = os.path.join(dest_root, source_folder_name)
-                            file_dests.append(os.path.join(final_dest_root, relative_path))
-
+                        file_dests = [os.path.join(dest_root, relative_path) for dest_root in dest_roots]
                         resolved_dests[full_path] = file_dests
 
                         # Push to queue for immediate processing
                         task = {
                             'source': full_path,
                             'destinations': file_dests,
+                            'dest_roots': dest_roots,
                             'size': file_size,
                             'base_source_path': source_path
                         }
@@ -85,7 +95,8 @@ class ScanWorker(QThread):
 
                         if files_found % 10 == 0:
                             self.scan_progress.emit(files_found, total_size)
-
+        except Exception as e:
+            self._report_problem(f"The scan stopped early: {e}")
         finally:
             self.file_queue.put(None) # Sentinel
 
@@ -172,7 +183,7 @@ class PostProcessWorker(QThread):
             return {"format": metadata.get('format', {}).get('format_long_name', 'N/A'),
                     "codec": video_stream.get('codec_long_name', 'N/A'),
                     "resolution": f"{video_stream.get('width')}x{video_stream.get('height')}",
-                    "fps": eval(video_stream.get('r_frame_rate', '0/1')),
+                    "fps": float(Fraction(video_stream.get('r_frame_rate') or '0/1')),
                     "duration": f"{float(video_stream.get('duration', 0)):.2f}s"}
         except Exception: return {}
     def _create_video_thumbnail_robust(self, video_path, thumb_size=(160, 90)):
@@ -226,7 +237,6 @@ class PostProcessWorker(QThread):
         thumb_name = f"{os.path.basename(file_path)}_{xxhash.xxh64(file_path.encode()).hexdigest()}.jpg"
         return os.path.join(temp_dir, thumb_name)
 
-# --- START REFACTOR: Simultaneous Hashing Implementation ---
 class TransferWorker(QThread):
     progress = Signal(str, float, float, int)
     file_progress = Signal(int, str, str, float)
@@ -236,36 +246,43 @@ class TransferWorker(QThread):
         super().__init__(parent)
         self.job = job; self.project_path = project_path
         self.is_paused = False; self.is_cancelled = False
-        self.CHUNK_SIZE = 4 * 1024 * 1024
-        
+
     def run(self):
         checksum_method = self.job['checksum_method']
         verification_mode = self.job.get("verification_mode", "full")
         report_data = {
-            'job_id': self.job['id'], 'start_time': datetime.now(), 
+            'job_id': self.job['id'], 'start_time': datetime.now(),
             'sources': self.job['sources'], 'destinations': self.job['destinations'],
             'checksum_method': checksum_method, 'files': [],
-            'status': 'Completed', 'total_size': 0, 'errors': []
+            'status': 'Completed', 'total_size': 0, 'errors': [], 'manifests': []
         }
-        
+
         total_bytes_processed_in_job = 0
         job_start_time = time.monotonic()
+        file_queue = self.job['file_queue']
+        control = copy_engine.Control(lambda: self.is_paused, lambda: self.is_cancelled)
+        # destination folder -> the verified files in it, for the manifest
+        verified_by_root = {}
+        sources_with_problems = set()
 
-        # Pull from the shared queue
-        file_queue = self.job.get('file_queue')
-        if not file_queue:
-            # Fallback for old style calls or tests without queue
-            # (Though in this refactor we aim to always use queue)
-            pass
+        def fail(message, base_source_path=None):
+            report_data['errors'].append(message)
+            if base_source_path:
+                sources_with_problems.add(base_source_path)
+            self.error.emit(message, self.job['id'])
+
+        def cancelled():
+            report_data['status'] = 'Cancelled'
+            report_data['end_time'] = datetime.now()
+            report_data['total_size'] = total_bytes_processed_in_job
+            self.job_finished.emit(report_data)
 
         while True:
-            # --- Main control loop for each file ---
             while self.is_paused:
                 if self.is_cancelled: break
                 time.sleep(0.5)
             if self.is_cancelled:
-                report_data['status'] = 'Cancelled'
-                self.job_finished.emit(report_data)
+                cancelled()
                 return
 
             task = file_queue.get()
@@ -273,158 +290,149 @@ class TransferWorker(QThread):
                 file_queue.task_done()
                 break # Sentinel received, all files processed
 
+            if 'scan_error' in task:
+                # The scan could not read part of a source. The job must not end green.
+                fail(task['scan_error'])
+                sources_with_problems.update(self.job['sources'])
+                file_queue.task_done()
+                continue
+
             source_file_path = task['source']
             dest_paths = task['destinations']
+            dest_roots = task.get('dest_roots')
             base_source_path = task['base_source_path']
+            name = os.path.basename(source_file_path)
 
             file_info = {
-                'source': source_file_path, 'destinations': [], 'status': 'Failed', 
-                'checksum': '', 'custom_metadata': self.job['metadata'].get(base_source_path, {})
+                'source': source_file_path, 'destinations': [], 'status': 'Failed',
+                'checksum': '', 'size': task['size'],
+                'custom_metadata': self.job['metadata'].get(base_source_path, {})
             }
 
             try:
-                # Re-check file size just in case it changed since scan
-                try:
-                    current_size = os.path.getsize(source_file_path)
-                    if current_size != task['size']:
-                         # Update to current size to avoid false verification failures
-                         file_size = current_size
-                    else:
-                         file_size = task['size']
-                except OSError:
-                    file_size = task['size'] # Fallback to scan size if we can't read it now
+                label = "Copying & Hashing..." if verification_mode == "full" else "Copying..."
+                self.file_progress.emit(0, label, source_file_path, 0.0)
 
-                file_info['size'] = file_size
+                def on_progress(done, total, path=source_file_path):
+                    percent = int((done / total) * 100) if total > 0 else 100
+                    self.file_progress.emit(percent, "Copying...", path, 0)
 
-                # --- Core Logic ---
-                source_hash = None
-                hasher = None
-                if verification_mode == "full":
-                    self.file_progress.emit(0, "Copying & Hashing...", source_file_path, 0.0)
-                    hasher = xxhash.xxh64() if checksum_method == "xxHash (Fast)" else hashlib.md5()
-                    
-                    self._copy_and_hash_file(source_file_path, dest_paths, hasher)
-                    source_hash = hasher.hexdigest()
-                    file_info['checksum'] = source_hash
+                result = copy_engine.copy_file(source_file_path, dest_paths, checksum_method,
+                                               verification_mode, control, on_progress)
+                file_info['size'] = result['size']
+                file_info['checksum'] = result['checksum']
+                file_info['destinations'] = result['destinations']
+
+                failed = [d for d in result['destinations'] if not d['ok']]
+                if failed:
+                    details = "; ".join(f"{d['path']}: {d['status']}" for d in failed)
+                    fail(f"{name} was NOT copied safely. {details}", base_source_path)
+                elif verification_mode == "none":
+                    file_info['status'] = 'Copied (Unverified)'
                 else:
-                    self.file_progress.emit(0, "Copying...", source_file_path, 0.0)
-                    for dest_path in dest_paths:
-                        self._copy_and_hash_file(source_file_path, [dest_path], None)
-                
-                # --- Verification Logic ---
-                verified_all_dests = True
-                for dest_path in dest_paths:
-                    dest_info = {'path': dest_path, 'verified': False}
-                    if not os.path.exists(dest_path) or file_size != os.path.getsize(dest_path):
-                        verified_all_dests = False
-                        dest_info['status'] = "Size Mismatch or Missing"
-                    elif verification_mode == "none":
-                        dest_info['status'] = "Unverified"
-                    elif verification_mode == "size":
-                        dest_info['verified'] = True
-                        dest_info['status'] = "Verified (Size Only)"
-                    elif verification_mode == "full":
-                        self.file_progress.emit(50, "Verifying...", dest_path, 0.0)
-                        dest_hash = self._calculate_hash(dest_path, checksum_method)
-                        if source_hash == dest_hash:
-                            dest_info['verified'] = True
-                        else:
-                            verified_all_dests = False
-                            dest_info['status'] = "Verification FAILED"
-                    file_info['destinations'].append(dest_info)
-
-                if verified_all_dests:
                     file_info['status'] = 'Verified'
+
+                if verification_mode == "full" and dest_roots:
+                    for dest, root in zip(result['destinations'], dest_roots):
+                        if dest['verified']:
+                            verified_by_root.setdefault(root, []).append((dest['path'], result['size'], result['checksum']))
                 report_data['files'].append(file_info)
 
+            except copy_engine.CopyCancelled:
+                file_queue.task_done()
+                cancelled()
+                return
             except Exception as e:
-                error_str = f"Error processing {os.path.basename(source_file_path)}: {e}"
                 file_info['status'] = f'Error: {e}'; report_data['files'].append(file_info)
-                report_data['errors'].append(error_str)
-                self.error.emit(error_str, self.job['id'])
+                fail(f"Error processing {name}: {e}", base_source_path)
 
             file_queue.task_done()
 
             total_bytes_processed_in_job += file_info.get('size', 0)
             elapsed_time = time.monotonic() - job_start_time
             speed_mbps = (total_bytes_processed_in_job / (1024*1024)) / elapsed_time if elapsed_time > 0 else 0
-
-            # Note: total_size in report_data is not updated here because it is dynamic.
-            # The UI handles the total size and ETA based on signals.
-            # We pass -1 for ETA if we don't trust the total size yet, or let UI handle it.
-            # However, the JobManager now needs to know the "current" total size from the scanner.
-            # For now, we will just emit progress.
-
             self.progress.emit(self.job['id'], total_bytes_processed_in_job, speed_mbps, -1)
+
+        if not report_data['files'] and not report_data['errors']:
+            fail("No files were found to copy. Check that the source is connected and readable.")
+
+        # Write the proof next to each copy: an ASC MHL manifest in every
+        # destination folder, listing the files that passed.
+        for root, entries in verified_by_root.items():
+            record = {'root': root, 'path': None, 'files': len(entries)}
+            try:
+                record['path'] = manifest.write_manifest(
+                    root, entries, checksum_method, APP_NAME, APP_VERSION, self.job.get('author'))
+            except manifest.ManifestError as e:
+                record['error'] = str(e)
+                fail(f"Manifest problem: {e}")
+            report_data['manifests'].append(record)
 
         if report_data['errors']:
             report_data['status'] = 'Completed with errors'
+        elif self.job.get('eject_on_completion') and verification_mode != "none":
+            # Only offer to eject cards whose every file was verified.
+            report_data['ejectable_sources_on_success'] = [
+                s for s in self.job['sources'] if s not in sources_with_problems and os.path.ismount(s)]
         report_data['end_time'] = datetime.now()
         report_data['total_size'] = total_bytes_processed_in_job
         self.job_finished.emit(report_data)
 
-    def _copy_and_hash_file(self, src_path, dest_paths, hasher):
-        """
-        Reads the source file once, updating the hasher and writing to all
-        destination files simultaneously.
-        """
-        src_size = os.path.getsize(src_path)
-        copied_bytes = 0
-        
-        # Open all file handles at once
-        dest_files = []
-        try:
-            for dest_path in dest_paths:
-                os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                dest_files.append(open(dest_path, 'wb'))
-            
-            with open(src_path, 'rb') as fsrc:
-                while True:
-                    while self.is_paused: time.sleep(0.5)
-                    if self.is_cancelled: raise InterruptedError("Copy cancelled by user")
-                    
-                    buf = fsrc.read(self.CHUNK_SIZE)
-                    if not buf:
-                        break
-                    
-                    # Update hash if a hasher object was provided
-                    if hasher:
-                        hasher.update(buf)
-                    
-                    # Write the same buffer to all open destination files
-                    for fdst in dest_files:
-                        fdst.write(buf)
-
-                    copied_bytes += len(buf)
-                    percent = int((copied_bytes / src_size) * 100) if src_size > 0 else 100
-                    self.file_progress.emit(percent, "Copying...", src_path, 0)
-        
-        finally:
-            # Ensure all destination files are closed
-            for fdst in dest_files:
-                fdst.close()
-
-        # Copy file metadata (timestamps, etc.) after closing
-        for dest_path in dest_paths:
-            if os.path.exists(dest_path):
-                shutil.copystat(src_path, dest_path)
-
-    def _calculate_hash(self, file_path, method):
-        """
-        Calculates the hash of a file. Used for destination verification.
-        """
-        hasher = xxhash.xxh64() if method == "xxHash (Fast)" else hashlib.md5()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(self.CHUNK_SIZE):
-                hasher.update(chunk)
-        return hasher.hexdigest()
-        
     def pause(self): self.is_paused = True
     def resume(self): self.is_paused = False
     def cancel(self): self.is_cancelled = True; self.is_paused = False
-# --- END REFACTOR ---
 
-# ... (MHLVerifyWorker and ReportWorker are unchanged)
+# Checksum tags Slate can check, best first. The value is the algorithm to run.
+#   xxhash64be - older MHL files, digest written most significant byte first
+#   xxh64 / xxh3 / xxh128 - ASC MHL names
+#   xxhash64   - older MHL files, digest usually written the other way round
+MHL_HASH_TAGS = {
+    'xxhash64be': 'xxh64', 'xxh64': 'xxh64', 'xxh128': 'xxh128', 'xxh3': 'xxh3',
+    'md5': 'md5', 'sha1': 'sha1', 'xxhash64': 'xxh64',
+}
+
+
+def parse_mhl(file_path):
+    """
+    Reads the file list out of an MHL file: either the older format
+    (<file>, <size>, <md5>/<xxhash64be>) or ASC MHL (<path size=...>, <xxh64>).
+    Returns a list of (relative path, expected checksum, tag name).
+    The tag name is None when the entry only has a checksum type Slate cannot check.
+    """
+    def local(tag):
+        return tag.rsplit('}', 1)[-1] if isinstance(tag, str) else ''
+
+    files = []
+    for elem in ET.parse(file_path).getroot().iter():
+        if local(elem.tag) != 'hash':
+            continue
+        relative_path, found = None, {}
+        for child in elem:
+            tag = local(child.tag)
+            if tag in ('file', 'path'):
+                relative_path = child.text
+            elif tag in MHL_HASH_TAGS and child.text:
+                found[tag] = child.text.strip()
+        if not relative_path:
+            continue
+        tag = next((t for t in MHL_HASH_TAGS if t in found), None)
+        files.append((relative_path, found.get(tag), tag))
+    return files
+
+
+def mhl_hash_matches(tag, expected, actual):
+    expected, actual = expected.lower(), actual.lower()
+    if expected == actual:
+        return True
+    if tag == 'xxhash64':
+        # Older tools wrote this tag with the bytes in the opposite order.
+        try:
+            return bytes.fromhex(expected)[::-1].hex() == actual
+        except ValueError:
+            return False
+    return False
+
+
 class MHLVerifyWorker(QThread):
     progress = Signal(int, str, float, int)
     file_progress = Signal(int, str, str, float)
@@ -435,7 +443,6 @@ class MHLVerifyWorker(QThread):
         self.job = job
         self.is_paused = False
         self.is_cancelled = False
-        self.CHUNK_SIZE = 8 * 1024 * 1024
     def run(self):
         mhl_file_path = self.job['mhl_file']
         target_dir = self.job['target_dir']
@@ -443,28 +450,29 @@ class MHLVerifyWorker(QThread):
                        'mhl_file': mhl_file_path, 'target_dir': target_dir,
                        'files': [], 'status': 'Completed', 'errors': [],
                        'verified_count': 0, 'failed_count': 0, 'missing_count': 0}
+        control = copy_engine.Control(lambda: self.is_paused, lambda: self.is_cancelled)
         try:
             self.progress.emit(-1, "Parsing MHL file...", 0.0, -1)
-            files_to_verify = self._parse_mhl(mhl_file_path)
+            files_to_verify = parse_mhl(mhl_file_path)
             total_files = len(files_to_verify)
-            for i, file_info in enumerate(files_to_verify):
-                while self.is_paused:
-                    if self.is_cancelled: break
-                    time.sleep(0.5)
-                if self.is_cancelled:
-                    report_data['status'] = 'Cancelled'
-                    self.job_finished.emit(report_data)
-                    return
-                relative_path, expected_hash, hash_type, size = file_info
+            if total_files == 0:
+                # Nothing listed means nothing was checked. That is not a pass.
+                raise ValueError("No files are listed in this MHL file, so nothing could be checked.")
+            for i, (relative_path, expected_hash, tag) in enumerate(files_to_verify):
+                control.checkpoint()
                 full_path = os.path.join(target_dir, relative_path)
-                file_report = {'path': full_path, 'expected_hash': expected_hash, 'hash_type': hash_type}
+                file_report = {'path': full_path, 'expected_hash': expected_hash, 'hash_type': tag}
                 if not os.path.exists(full_path):
                     file_report['status'] = 'Missing'
                     report_data['missing_count'] += 1
+                elif tag is None:
+                    file_report.update(status='FAILED', expected_hash='(none Slate can check)',
+                                       hash_type='unsupported', actual_hash='not checked')
+                    report_data['failed_count'] += 1
                 else:
                     self.file_progress.emit(0, f"Verifying {os.path.basename(full_path)}...", full_path, 0.0)
-                    actual_hash = self._calculate_hash(full_path, hash_type)
-                    if actual_hash == expected_hash:
+                    actual_hash = copy_engine.hash_file(full_path, MHL_HASH_TAGS[tag], control)
+                    if mhl_hash_matches(tag, expected_hash, actual_hash):
                         file_report['status'] = 'Verified'
                         report_data['verified_count'] += 1
                     else:
@@ -475,42 +483,20 @@ class MHLVerifyWorker(QThread):
                 progress_percent = int(((i + 1) / total_files) * 100) if total_files > 0 else 100
                 progress_text = f"Verified file {i + 1} of {total_files}"
                 self.progress.emit(progress_percent, progress_text, 0.0, -1)
+        except copy_engine.CopyCancelled:
+            report_data['status'] = 'Cancelled'
+            report_data['end_time'] = datetime.now()
+            self.job_finished.emit(report_data)
+            return
         except Exception as e:
             error_msg = f"A critical error occurred: {e}"
             report_data['status'] = 'Failed'
             report_data['errors'].append(error_msg)
             self.error.emit(error_msg, self.job['id'])
-        if report_data['failed_count'] > 0 or report_data['missing_count'] > 0:
+        if report_data['status'] != 'Failed' and (report_data['failed_count'] > 0 or report_data['missing_count'] > 0):
             report_data['status'] = 'Completed with issues'
         report_data['end_time'] = datetime.now()
         self.job_finished.emit(report_data)
-    def _parse_mhl(self, file_path):
-        files = []
-        tree = ET.parse(file_path)
-        root = tree.getroot()
-        ns = {'mhl': 'http://www.movielabs.com/ACF/MHL/v1.0'}
-        hash_elements = root.findall('.//mhl:hash', ns)
-        if not hash_elements:
-            hash_elements = root.findall('.//hash')
-        for hash_elem in hash_elements:
-            file_path_elem = hash_elem.find('mhl:file', ns) or hash_elem.find('file')
-            size_elem = hash_elem.find('mhl:size', ns) or hash_elem.find('size')
-            hash_val, hash_type = None, None
-            xxhash64_elem = hash_elem.find('mhl:xxhash64', ns) or hash_elem.find('xxhash64')
-            md5_elem = hash_elem.find('mhl:md5', ns) or hash_elem.find('md5')
-            if xxhash64_elem is not None:
-                hash_val, hash_type = xxhash64_elem.text, 'xxhash64'
-            elif md5_elem is not None:
-                hash_val, hash_type = md5_elem.text, 'md5'
-            if file_path_elem is not None and hash_val:
-                files.append((file_path_elem.text, hash_val, hash_type, int(size_elem.text)))
-        return files
-    def _calculate_hash(self, file_path, method):
-        hasher = xxhash.xxh64() if method == "xxhash64" else hashlib.md5()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(self.CHUNK_SIZE):
-                hasher.update(chunk)
-        return hasher.hexdigest()
     def pause(self): self.is_paused = True
     def resume(self): self.is_paused = False
     def cancel(self): self.is_cancelled = True; self.is_paused = False

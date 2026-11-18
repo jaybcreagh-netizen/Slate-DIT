@@ -48,7 +48,10 @@ class ReportManager:
         if 'mhl_file' in report:
             self._generate_report(self._build_mhl_verify_pdf, report, "Report")
         else:
-            self._generate_report(self._build_copy_pdf_interactive, report, "Report")
+            shoot_day, ok = QInputDialog.getText(self.window, "Shoot Day", "Enter Shoot Day / Date (for report):")
+            if not ok:
+                shoot_day = ""
+            self._generate_report(lambda r, path: self._build_copy_pdf(r, path, shoot_day), report, "Report")
             
     def save_contact_sheet(self, report):
         self._generate_report(self._build_contact_sheet_pdf, report, "ContactSheet")
@@ -66,12 +69,6 @@ class ReportManager:
         self.report_worker.finished.connect(self.on_report_finished)
         self.report_worker.start()
         
-    def _build_copy_pdf_interactive(self, report, file_path):
-        shoot_day, ok = QInputDialog.getText(self.window, "Shoot Day", "Enter Shoot Day / Date (for report):")
-        if not ok:
-            shoot_day = ""
-        self._build_copy_pdf(report, file_path, shoot_day)
-
     def on_report_finished(self, success, file_path, error_message):
         self.window.clear_status_message()
         if success:
@@ -295,7 +292,7 @@ class ReportManager:
 
     def save_mhl_manifest(self, report):
         default_name = f"{os.path.basename(self.window.project_path)}_{report['job_id']}.mhl"
-        file_path, _ = QFileDialog.getSaveFileName(self.window, "Save MHL Manifest", default_name, "MHL Files (*.mhl)")
+        file_path, _ = QFileDialog.getSaveFileName(self.window, "Export Legacy MHL", default_name, "MHL Files (*.mhl)")
         if not file_path:
             return
         root = Element('hashlist', version='1.1')
@@ -308,9 +305,9 @@ class ReportManager:
         for file in report['files']:
             if file['status'] != 'Verified':
                 continue
-            hash_tag = 'xxhash64' if 'xxHash' in report['checksum_method'] else 'md5'
+            hash_tag = 'xxhash64be' if 'xxHash' in report['checksum_method'] else 'md5'
             for dest in file['destinations']:
-                if dest['verified']:
+                if dest.get('verified'):
                     relative_path = os.path.relpath(dest['path'], os.path.dirname(file_path))
                     hash_element = SubElement(root, 'hash')
                     SubElement(hash_element, 'file').text = relative_path

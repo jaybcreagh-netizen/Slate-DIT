@@ -6,3 +6,4 @@ reportlab
 opencv-python
 Pillow
 rawpy
+ascmhl

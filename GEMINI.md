@@ -8,12 +8,13 @@ The application provides a graphical user interface for:
 
 *   **Project Management:** Creating and managing projects, each with its own set of sources, destinations, and settings.
 *   **File Transfers:** Copying files from source to destination with features like:
-    *   Checksum verification (xxHash, MD5)
+    *   Checksum verification (xxHash, MD5): each copy is read back from the drive and compared with the source
     *   Job queuing and concurrent transfers
-    *   Skipping existing files
-    *   Resuming partial transfers
-    *   Ejecting drives on completion
-*   **Reporting:** Generating transfer reports in PDF format, including contact sheets and MHL manifests.
+    *   Never overwriting: a file already at the destination is checked against the source, not replaced
+    *   No half-written files: a file is named `<name>.slate-partial` until it passes its check
+    *   Ejecting drives on completion (only offered when every file was verified)
+*   **Proof of copy:** An ASC MHL manifest (`ascmhl/` folder) is written automatically at the top of each copied card on every destination, using the ASC reference library.
+*   **Reporting:** Generating transfer reports in PDF format, including contact sheets. A legacy MHL (v1.1) export is also available.
 *   **Post-Processing:** Running post-transfer tasks, likely involving `ffmpeg` and `ffprobe` for media file analysis and thumbnail generation.
 *   **Template Management:** Saving and loading job templates to streamline repetitive tasks.
 
@@ -43,6 +44,17 @@ The project uses a `requirements.txt` file to manage Python dependencies. To run
     python main.py
     ```
 
+5.  **Run the tests:**
+    ```bash
+    python -m unittest discover -s tests
+    ```
+    `tests/test_faults.py` damages copies on purpose (flipped bit, full drive, unplugged drive, cancel) and checks the job reports it. `tests/test_manifest.py` checks the manifests with the ASC reference tool.
+
+6.  **Time a copy on real hardware:**
+    ```bash
+    python bench_offload.py /Volumes/CARD /Volumes/DriveA /Volumes/DriveB
+    ```
+
 There is also evidence of PyInstaller usage (`hook-PySide6.py`), which suggests the project can be bundled into a standalone executable.
 
 ## Development Conventions
@@ -54,6 +66,8 @@ There is also evidence of PyInstaller usage (`hook-PySide6.py`), which suggests 
     *   `main.py`: The main application entry point and main window.
     *   `config.py`: Application configuration.
     *   `job_manager.py`: Core logic for managing transfer jobs.
+    *   `copy_engine.py`: Copies one file to every destination and verifies it. No Qt, so it can be tested and timed alone.
+    *   `manifest.py`: Writes the ASC MHL manifest beside each copy.
     *   `workers.py`: Worker classes for performing background tasks.
     *   `ui_components.py`: Reusable UI components.
     *   `utils.py`: Utility functions.
