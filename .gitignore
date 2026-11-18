@@ -1,7 +1,20 @@
 # Python
 venv/
+.venv/
 __pycache__/
 *.pyc
+
+# Stray virtual environments created at the repo root by a mistyped
+# `python -m venv` command (each word of a trailing comment became a folder).
+# The leading slash limits each rule to the repo root.
+/#/
+/3.11/
+/Create/
+/Python/
+/a/
+/new/
+/one/
+/with/
 
 # PyInstaller
 build/
