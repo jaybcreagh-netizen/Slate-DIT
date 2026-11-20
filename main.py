@@ -22,7 +22,7 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 
 import resources_rc
 
-from config import APP_NAME, PROJECTS_BASE_DIR
+from config import APP_NAME, PROJECTS_BASE_DIR, get_resource_path
 from app_log import log, setup_logging, LOG_PATH
 from utils import get_icon, format_eta
 from ui_components import (
@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
             self.setUnifiedTitleAndToolBarOnMac(True)
         
         try:
-            with open("style.qss", "r") as f:
+            with open(get_resource_path("style.qss"), "r") as f:
                 self.setStyleSheet(f.read())
         except FileNotFoundError:
             log.warning("style.qss not found. Using default styles.")
